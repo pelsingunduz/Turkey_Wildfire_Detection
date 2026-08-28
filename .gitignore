@@ -2,11 +2,6 @@
 .env
 venv/
 
-# Veri (raw ve processed - repoya gitmesin, sadece kod gitsin)
-data/raw/*
-data/processed/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
 
 # Eğitilmiş modeller (büyük dosyalar, tekrar üretilebilir)
 outputs/models/*
