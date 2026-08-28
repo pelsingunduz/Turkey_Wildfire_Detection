@@ -8,3 +8,7 @@ matplotlib
 jupyter
 folium
 streamlit-folium
+geopandas
+shapely
+geopy
+
