@@ -1,0 +1,24 @@
+# Ortam ve gizli bilgiler
+.env
+venv/
+
+# Veri (raw ve processed - repoya gitmesin, sadece kod gitsin)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Eğitilmiş modeller (büyük dosyalar, tekrar üretilebilir)
+outputs/models/*
+!outputs/models/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+
+# Jupyter checkpoint dosyaları
+.ipynb_checkpoints/
+
+# Mac sistem dosyası
+.DS_Store
+cron.log
