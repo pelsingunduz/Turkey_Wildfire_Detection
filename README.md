@@ -13,6 +13,8 @@ sistem inşa etmek — statik bir Kaggle veri setinden değil, canlı bir API'de
 
 ## Mimari
 
+\`\`\`
+
 NASA FIRMS API (VIIRS_SNPP_NRT, Türkiye bounding box)
 ↓
 INGESTION — her 4 saatte bir otomatik veri çekme (cron)
@@ -32,6 +34,7 @@ sapma tespiti)
 ↓
 DASHBOARD (Streamlit) — harita üzerinde bölge seçimi, 3 bağımsız panel
 
+\`\`\`
 
 ## Tasarım Kararları ve Gerekçeleri
 
@@ -86,6 +89,8 @@ Bu proje, her adımda bilinçli mühendislik kararları içeriyor:
 
 ## Proje Yapısı
 
+\`\`\`
+
 turkey-wildfire-detection/
 ├── data/
 │ ├── raw/ # FIRMS'ten çekilen ham CSV'ler (zaman damgalı)
@@ -105,6 +110,7 @@ turkey-wildfire-detection/
 │ └── models/ # Eğitilmiş modeller (joblib)
 └── requirements.txt
 
+\`\`\`
 
 ## Kurulum ve Çalıştırma
 
@@ -149,3 +155,4 @@ streamlit run dashboard/app.py
   veri toplanabilmesi)
 - Konum bilgisinin (grid koordinatları veya bölge kategorileri) veri
   arttıkça modele feature olarak eklenmesi
+
