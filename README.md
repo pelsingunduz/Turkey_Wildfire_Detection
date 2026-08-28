@@ -12,9 +12,7 @@ uydu verisiyle çalışan, otomatik veri toplayan ve sürekli güncellenen bir
 sistem inşa etmek — statik bir Kaggle veri setinden değil, canlı bir API'den.
 
 ## Mimari
-
-\`\`\`
-
+```
 NASA FIRMS API (VIIRS_SNPP_NRT, Türkiye bounding box)
 ↓
 INGESTION — her 4 saatte bir otomatik veri çekme (cron)
@@ -33,8 +31,7 @@ sapma tespiti)
 └─────────────────┴────────────────────┴──────────────────────┘
 ↓
 DASHBOARD (Streamlit) — harita üzerinde bölge seçimi, 3 bağımsız panel
-
-\`\`\`
+```
 
 ## Tasarım Kararları ve Gerekçeleri
 
@@ -88,9 +85,7 @@ Bu proje, her adımda bilinçli mühendislik kararları içeriyor:
 - **Coğrafi isimlendirme:** geopy (Nominatim/OpenStreetMap)
 
 ## Proje Yapısı
-
-\`\`\`
-
+```
 turkey-wildfire-detection/
 ├── data/
 │ ├── raw/ # FIRMS'ten çekilen ham CSV'ler (zaman damgalı)
@@ -109,8 +104,7 @@ turkey-wildfire-detection/
 ├── outputs/
 │ └── models/ # Eğitilmiş modeller (joblib)
 └── requirements.txt
-
-\`\`\`
+```
 
 ## Kurulum ve Çalıştırma
 
@@ -128,12 +122,14 @@ FIRMS_MAP_KEY=your_key_here
 
 
 Veri toplama ve işleme:
+
 ```bash
 python src/ingestion.py
 python src/features.py
 ```
 
 Modelleri eğitme:
+
 ```bash
 python src/models/classifier.py
 python src/models/forecaster.py
@@ -141,6 +137,7 @@ python src/models/anomaly.py
 ```
 
 Dashboard'u başlatma:
+
 ```bash
 streamlit run dashboard/app.py
 ```
@@ -155,4 +152,9 @@ streamlit run dashboard/app.py
   veri toplanabilmesi)
 - Konum bilgisinin (grid koordinatları veya bölge kategorileri) veri
   arttıkça modele feature olarak eklenmesi
+
+
+ <img width="1168" height="615" alt="Ekran Resmi 2026-08-28 16 31 14" src="https://github.com/user-attachments/assets/6c163a41-cc96-490e-8a8f-6b342254df56" />
+<img width="1169" height="614" alt="Ekran Resmi 2026-08-28 16 32 14" src="https://github.com/user-attachments/assets/36c72cfe-6916-4c27-b870-d0acfa8fe828" />
+<img width="1154" height="608" alt="Ekran Resmi 2026-08-28 16 31 47" src="https://github.com/user-attachments/assets/84d41e35-d4fb-43ba-8936-db2e8a45f7af" />
 
