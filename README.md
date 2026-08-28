@@ -15,7 +15,7 @@ sistem inşa etmek — statik bir Kaggle veri setinden değil, canlı bir API'de
 ```
 NASA FIRMS API (VIIRS_SNPP_NRT, Türkiye bounding box)
 ↓
-INGESTION — her 4 saatte bir otomatik veri çekme (cron)
+INGESTION — her 4 saatte bir otomatik veri çekme (GitHub Actions)
 ↓
 FEATURE ENGINEERING
 ├── Duplicate temizleme
@@ -32,6 +32,23 @@ sapma tespiti)
 ↓
 DASHBOARD (Streamlit) — harita üzerinde bölge seçimi, 3 bağımsız panel
 ```
+
+## Otomasyon
+
+Veri toplama ve işleme, GitHub Actions üzerinde **her 4 saatte bir** otomatik
+çalışır (`.github/workflows/data_pipeline.yml`). Bu, projenin bilgisayarın
+açık/kapalı olma durumundan tamamen bağımsız, sürekli veri biriktirmesini
+sağlar:
+
+1. FIRMS API'den yeni veri çekilir
+2. Veri temizlenir, işlenir, günlük özet tablo güncellenir
+3. Güncellenen veri otomatik olarak repoya commit'lenir
+
+FIRMS API key'i, GitHub Secrets üzerinden güvenli şekilde workflow'a
+aktarılır — kod içinde hiçbir yerde açık şekilde bulunmaz.
+
+Model eğitimi şu an bu otomasyonun dışında; güncel veriyle yeniden eğitmek
+için `src/models/` altındaki script'ler elle çalıştırılır.
 
 ## Tasarım Kararları ve Gerekçeleri
 
@@ -61,6 +78,10 @@ Bu proje, her adımda bilinçli mühendislik kararları içeriyor:
   güvenilirlik sağlıyor (bir çekim başarısız olsa bile veri kaybolmuyor),
   ama `drop_duplicates()` adımını pipeline'ın kalıcı bir parçası haline
   getiriyor.
+- **Yerel cron yerine GitHub Actions:** İlk versiyonda yerel `cron` kullanıldı,
+  ama bu bilgisayar kapalı/uykudayken veri kaybına yol açıyordu. Pipeline,
+  bilgisayardan bağımsız çalışabilmesi için GitHub Actions'a taşındı — artık
+  veri toplama, laptop kapalı olsa bile kesintisiz devam ediyor.
 
 ## Bilinen Sınırlamalar
 
@@ -80,7 +101,7 @@ Bu proje, her adımda bilinçli mühendislik kararları içeriyor:
 - **Veri:** NASA FIRMS API (VIIRS_SNPP_NRT)
 - **İşleme:** pandas, geopandas, shapely
 - **Modelleme:** scikit-learn (RandomForestClassifier, LinearRegression)
-- **Otomasyon:** cron
+- **Otomasyon:** GitHub Actions (bulut tabanlı, sürekli çalışan CI/CD pipeline'ı)
 - **Dashboard:** Streamlit, folium
 - **Coğrafi isimlendirme:** geopy (Nominatim/OpenStreetMap)
 
@@ -148,10 +169,12 @@ streamlit run dashboard/app.py
   çalışması
 - Model eğitiminin otomatikleştirilmesi (şu an elle tetikleniyor)
 - Çoklu sensör desteği (MODIS ile karşılaştırmalı analiz)
-- Bulut tabanlı sürekli çalışma (yerel cron yerine, laptop kapalıyken de
-  veri toplanabilmesi)
 - Konum bilgisinin (grid koordinatları veya bölge kategorileri) veri
   arttıkça modele feature olarak eklenmesi
+- Model eğitiminin de GitHub Actions'a taşınması (şu an sadece veri toplama
+  otomatik, model yeniden eğitimi hâlâ elle tetikleniyor)
+- Karşılaştırmalı model denemeleri (örn. sınıflandırmada XGBoost,
+  anomali tespitinde Isolation Forest gibi alternatif algoritmalar)
 
 
  <img width="1168" height="615" alt="Ekran Resmi 2026-08-28 16 31 14" src="https://github.com/user-attachments/assets/6c163a41-cc96-490e-8a8f-6b342254df56" />
