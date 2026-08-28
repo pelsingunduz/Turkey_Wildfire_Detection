@@ -11,6 +11,8 @@ beslenen üç bağımsız ML problemi** kurmayı hedefliyor. Amaç, gerçek zama
 uydu verisiyle çalışan, otomatik veri toplayan ve sürekli güncellenen bir
 sistem inşa etmek — statik bir Kaggle veri setinden değil, canlı bir API'den.
 
+📍 Detaylı yol haritası ve ilerleme takibi için: [Turkey Wildfire Detection Roadmap](https://github.com/users/pelsingunduz/projects/2/views/1)
+
 ## Mimari
 ```
 NASA FIRMS API (VIIRS_SNPP_NRT, Türkiye bounding box)
