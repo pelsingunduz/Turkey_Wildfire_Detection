@@ -31,10 +31,19 @@ jobs:
       - name: Veriyi işle (features)
         run: python src/features.py
 
+      - name: Sınıflandırma modelini eğit
+        run: python src/models/classifier.py
+
+      - name: Zaman serisi modelini eğit
+        run: python src/models/forecaster.py
+
+      - name: Anomali tespitini çalıştır
+        run: python src/models/anomaly.py
+
       - name: Değişiklikleri commit'le ve push'la
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/
-          git diff --staged --quiet || git commit -m "Otomatik veri güncellemesi: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git add data/ outputs/
+          git diff --staged --quiet || git commit -m "Otomatik veri ve model güncellemesi: $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push

@@ -12,8 +12,8 @@ import joblib
 import sys
 import os
 sys.path.append(os.path.abspath('src/models'))
-from anomaly import calculate_zscore_features, flag_anomalies
-from forecaster import add_lag_features, FEATURE_COLUMNS as FORECASTER_FEATURES
+from anomaly import calculate_zscore_features, flag_anomalies # type: ignore
+from forecaster import add_lag_features, FEATURE_COLUMNS as FORECASTER_FEATURES # type: ignore
 from streamlit_folium import st_folium
 
 st.set_page_config(page_title="Türkiye Orman Yangını Tespit Sistemi", layout="wide")
@@ -29,7 +29,10 @@ def load_grid_points():
     locations = pd.read_csv("data/processed/grid_location_names.csv")
     grid_points = grid_points.merge(locations, on='grid_id', how='left')
 
-    grid_points['display_name'] = grid_points['province'] + ' - ' + grid_points['district']
+    grid_points['display_name'] = grid_points.apply(
+    lambda row: row['province'] if row['district'] == 'Bilinmiyor' else f"{row['province']} - {row['district']}",
+    axis=1
+)
 
     return grid_points
 
@@ -55,8 +58,14 @@ def load_data_with_anomaly_features():
 
 @st.cache_resource
 def load_classifier():
-    """Kayıtlı sınıflandırma modelini yükler (her tıklamada yeniden eğitmek yerine)."""
+    """Kayıtlı sınıflandırma modelini yükler (Logistic Regression, ölçeklendirilmiş veri bekler)."""
     return joblib.load("outputs/models/classifier.joblib")
+
+
+@st.cache_resource
+def load_scaler():
+    """Sınıflandırma modeliyle birlikte eğitilen StandardScaler'ı yükler."""
+    return joblib.load("outputs/models/scaler.joblib")
 
 
 @st.cache_resource
@@ -109,10 +118,12 @@ if map_data.get("last_object_clicked_tooltip"):
             with col1:
                 st.subheader("🎯 Risk Seviyesi")
                 classifier = load_classifier()
+                scaler = load_scaler()
                 features = latest_row[['avg_brightness', 'avg_frp', 'max_frp']].values.reshape(1, -1)
-                prediction = classifier.predict(features)[0]
+                features_scaled = scaler.transform(features)
+                prediction = classifier.predict(features_scaled)[0]
                 st.metric("Tahmini Risk", prediction)
-                st.caption(f"Son veri tarihi: {latest_row['date']}")
+                st.caption(f"Bu bölgede son sıcak nokta tespiti: {latest_row['date']}")
 
             with col2:
                 st.subheader("📈 Zaman Serisi Tahmini")

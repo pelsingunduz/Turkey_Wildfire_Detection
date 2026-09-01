@@ -12,3 +12,4 @@ geopandas
 shapely
 geopy
 
+xgboost
