@@ -27,7 +27,12 @@ Z_SCORE_ANOMALY_THRESHOLD = 3  # kaç sigma üstü "anomali" sayılır (istatist
 
 
 def calculate_zscore_features(df):
-    """Her satır için baseline_mean, baseline_std ve z_score hesaplar."""
+    """Her satır için baseline_mean, baseline_std ve z_score hesaplar.
+    
+    baseline_std == 0 olduğunda (çok az gözlemden hiç varyans çıkmadığında),
+    z_score NaN olarak bırakılır -- bu matematiksel bir "sonsuz anomali" değil,
+    örneklem yetersizliğinin işaretidir ve anomali olarak sayılmamalıdır.
+    """
     df = df.copy()
 
     df['baseline_mean'] = (
@@ -38,7 +43,10 @@ def calculate_zscore_features(df):
         df.groupby('grid_id')['fire_count']
         .transform(lambda x: x.shift(1).expanding().std())
     )
+
     df['z_score'] = (df['fire_count'] - df['baseline_mean']) / df['baseline_std']
+    # std == 0 durumunda z_score'u NaN yap (sıfıra bölme / sahte-sonsuz anomali önleme)
+    df.loc[df['baseline_std'] == 0, 'z_score'] = float('nan')
 
     return df
 

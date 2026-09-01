@@ -10,7 +10,8 @@ import pandas as pd
 import folium
 import joblib
 import sys
-sys.path.append('src/models')
+import os
+sys.path.append(os.path.abspath('src/models'))
 from anomaly import calculate_zscore_features, flag_anomalies
 from forecaster import add_lag_features, FEATURE_COLUMNS as FORECASTER_FEATURES
 from streamlit_folium import st_folium
