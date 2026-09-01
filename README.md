@@ -49,8 +49,12 @@ sağlar:
 FIRMS API key'i, GitHub Secrets üzerinden güvenli şekilde workflow'a
 aktarılır — kod içinde hiçbir yerde açık şekilde bulunmaz.
 
-Model eğitimi şu an bu otomasyonun dışında; güncel veriyle yeniden eğitmek
-için `src/models/` altındaki script'ler elle çalıştırılır.
+Model eğitimi de otomasyona dahildir: veri güncellendikten sonra üç model
+(sınıflandırma, zaman serisi, anomali tespiti) `src/models/` altındaki
+script'lerle otomatik olarak yeniden eğitilir ve güncellenen model
+dosyaları (`outputs/models/*.joblib`) da veriyle birlikte repoya
+commit'lenir. Bu sayede dashboard'u ne zaman açsan, en güncel veriyle
+eğitilmiş modelleri kullanmış olursun (yalnızca `git pull` yeterlidir).
 
 ## Tasarım Kararları ve Gerekçeleri
 
@@ -84,6 +88,42 @@ Bu proje, her adımda bilinçli mühendislik kararları içeriyor:
   ama bu bilgisayar kapalı/uykudayken veri kaybına yol açıyordu. Pipeline,
   bilgisayardan bağımsız çalışabilmesi için GitHub Actions'a taşındı — artık
   veri toplama, laptop kapalı olsa bile kesintisiz devam ediyor.
+  - **Sınıflandırmada beş algoritma karşılaştırıldı:** Random Forest, XGBoost,
+  Logistic Regression, SVM ve KNN aynı veri ve test seti üzerinde eğitilip
+  karşılaştırıldı. Ağaç tabanlı olmayan üç model (Logistic Regression, SVM,
+  KNN) için `StandardScaler` ile ölçeklendirme uygulandı, çünkü bu
+  algoritmalar feature büyüklüğünden etkileniyor. Dashboard'un resmi
+  modeli, karşılaştırma sonuçlarına göre **Logistic Regression** olarak
+  seçildi — en yüksek accuracy/macro F1'e sahip olmasının yanında, kritik
+  sınıflardaki (orta/yüksek risk) recall değerinden ödün vermeden daha az
+  yanlış alarm üretiyor. Küçük veri setinde (~260 satır) basit bir doğrusal
+  modelin karmaşık ağaç modellerini geçmesi beklenen bir sonuç — az veri,
+  karmaşık modellerin ezberlemeye (overfitting) daha yatkın olmasına yol
+  açar.
+- **Anomali tespitinde sıfır-varyans düzeltmesi:** Bir grid hücresinin
+  geçmişinde hiç varyans yoksa (örn. hep aynı sayıda tespit), z-score
+  hesaplaması sıfıra bölme nedeniyle yapay olarak "sonsuz anomali"
+  üretiyordu. Bu durumlar artık `NaN` (hesaplanamaz) olarak işaretleniyor,
+  yanlış pozitif anomali sayısını önlüyor.
+
+ ## Model Karşılaştırmaları
+
+ Sınıflandırma probleminde beş algoritma, aynı train/test split üzerinde
+ karşılaştırıldı (test seti: 52 satır):
+ 
+  | Model | Accuracy | Macro F1 |
+  |---|---|---|
+  | Logistic Regression | 0.69 | 0.58 |
+  | SVM | 0.65 | 0.53 |
+  | Random Forest | 0.62 | 0.52 |
+  | XGBoost | 0.60 | 0.51 |
+  | KNN | 0.56 | 0.48 |
+
+**Not:** Bu sonuçlar küçük bir test setine (52 satır) dayanıyor, aralarındaki
+farkların çoğu istatistiksel olarak anlamlı olmayabilir. Veri arttıkça bu
+karşılaştırma yeniden çalıştırılıp güncellenmelidir. Amaç "kesin kazananı"
+bulmak değil, algoritma seçiminin veriye dayalı, sistematik bir süreç
+olduğunu göstermek.
 
 ## Bilinen Sınırlamalar
 
@@ -173,8 +213,8 @@ streamlit run dashboard/app.py
 - Çoklu sensör desteği (MODIS ile karşılaştırmalı analiz)
 - Konum bilgisinin (grid koordinatları veya bölge kategorileri) veri
   arttıkça modele feature olarak eklenmesi
-- Model eğitiminin de GitHub Actions'a taşınması (şu an sadece veri toplama
-  otomatik, model yeniden eğitimi hâlâ elle tetikleniyor)
+- Zaman serisi ve anomali tespiti için de çoklu algoritma karşılaştırması
+  (Random Forest Regressor, Isolation Forest gibi)
 - Karşılaştırmalı model denemeleri (örn. sınıflandırmada XGBoost,
   anomali tespitinde Isolation Forest gibi alternatif algoritmalar)
 
