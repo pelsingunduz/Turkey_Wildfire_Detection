@@ -32,10 +32,21 @@ def load_grid_points():
     locations = pd.read_csv("data/processed/grid_location_names.csv")
     grid_points = grid_points.merge(locations, on='grid_id', how='left')
 
+    # Hem il hem ilçe bilinmiyorsa (sınır/deniz üzerine düşen hücreler),
+    # haritada anlamlı bir isim gösteremeyiz -- bu hücreleri haritadan
+    # çıkarıyoruz (model/veri tarafında hiçbir şey değişmiyor, sadece görünürlük).
+    unknown_both = (grid_points['province'] == 'Bilinmiyor') & (grid_points['district'] == 'Bilinmiyor')
+    grid_points = grid_points[~unknown_both]
+
     grid_points['display_name'] = grid_points.apply(
-    lambda row: row['province'] if row['district'] == 'Bilinmiyor' else f"{row['province']} - {row['district']}",
-    axis=1
-)
+        lambda row: row['province'] if row['district'] == 'Bilinmiyor' else f"{row['province']} - {row['district']}",
+        axis=1
+    )
+
+    # Aynı il/ilçeye birden fazla grid hücresi düşebilir (0.25° hücre, idari
+    # sınırdan küçük olabiliyor) -- haritada karışıklık/çakışma olmasın diye
+    # her isimden sadece bir tanesini gösteriyoruz.
+    grid_points = grid_points.drop_duplicates(subset='display_name', keep='first')
 
     return grid_points
 
@@ -105,16 +116,33 @@ st.write(f"Toplam {len(grid_points)} grid hücresi izleniyor.")
 
 m = folium.Map(location=[39.0, 35.0], zoom_start=6)
 
+marker_names = []
 for _, row in grid_points.iterrows():
-    folium.CircleMarker(
+    marker = folium.CircleMarker(
         location=[row['grid_lat'] + 0.125, row['grid_lon'] + 0.125],
         radius=6,
         popup=row['display_name'],
         tooltip=row['display_name'],
-        color='orange',
+        color='red',
         fill=True,
-        fill_opacity=0.7
-    ).add_to(m)
+        fill_color='red',
+        opacity=0,
+        fill_opacity=0,
+    )
+    marker.add_to(m)
+    marker_names.append(marker.get_name())
+
+# Marker'lar varsayılan olarak görünmez (opacity=0) -- estetik açıdan
+# haritayı sade tutmak için. Fareyle üzerine gelindiğinde (mouseover)
+# görünür hale gelir, uzaklaşınca (mouseout) tekrar kaybolur. Tıklama ve
+# tooltip işlevselliği opaklıktan bağımsız çalışır, bu yüzden bu sadece
+# görsel bir tercih, işlevsellik kaybı yok.
+hover_js = "\n".join(
+    f"{name}.on('mouseover', function(e) {{ this.setStyle({{opacity: 1, fillOpacity: 0.7}}); }});"
+    f"{name}.on('mouseout', function(e) {{ this.setStyle({{opacity: 0, fillOpacity: 0}}); }});"
+    for name in marker_names
+)
+m.get_root().html.add_child(folium.Element(f"<script>{hover_js}</script>"))
 
 map_data = st_folium(m, width=900, height=500)
 
