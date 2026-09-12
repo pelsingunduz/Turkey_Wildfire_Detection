@@ -1,45 +1,36 @@
 name: Veri Toplama ve İşleme Pipeline'ı
-
 on:
   schedule:
     # Her 4 saatte bir çalış (UTC saatine göre - hatırlarsan cron'da da UTC kullanılıyordu)
     - cron: '0 */4 * * *'
   workflow_dispatch:
     # Bu, GitHub arayüzünden "manuel çalıştır" butonunu aktif eder (test için faydalı)
-
 jobs:
   collect-and-process:
     runs-on: ubuntu-latest
-
     steps:
       - name: Repoyu checkout et
         uses: actions/checkout@v4
-
       - name: Python kurulumu
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
       - name: Bağımlılıkları yükle
         run: pip install -r requirements.txt
-
       - name: Veri çek (ingestion)
         env:
           FIRMS_MAP_KEY: ${{ secrets.FIRMS_MAP_KEY }}
         run: python src/ingestion.py
-
       - name: Veriyi işle (features)
         run: python src/features.py
-
       - name: Sınıflandırma modelini eğit
         run: python src/models/classifier.py
-
       - name: Zaman serisi modelini eğit
         run: python src/models/forecaster.py
-
       - name: Anomali tespitini çalıştır
         run: python src/models/anomaly.py
-
+      - name: Yangın olasılığı modelini eğit
+        run: python src/models/occurrence.py
       - name: Değişiklikleri commit'le ve push'la
         run: |
           git config user.name "github-actions[bot]"
