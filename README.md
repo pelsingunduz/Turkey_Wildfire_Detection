@@ -1,5 +1,7 @@
 # 🔥 Türkiye Orman Yangını Erken Tespit Sistemi
 
+🔗 **Canlı demo:** [turkiyeormanyanginitespiti.streamlit.app](https://turkiyeormanyanginitespiti.streamlit.app/)
+
 NASA FIRMS uydu verisiyle beslenen, Türkiye genelinde orman yangını riskini
 **dört farklı makine öğrenmesi yaklaşımıyla** (yangın olasılığı, sınıflandırma,
 zaman serisi tahmini, anomali tespiti) analiz eden uçtan uca bir sistem.
