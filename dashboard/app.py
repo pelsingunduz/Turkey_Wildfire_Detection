@@ -1,8 +1,9 @@
 """
 Türkiye Orman Yangını Erken Tespit Dashboard'u
 
-Harita üzerinde bir grid hücresine tıklayarak, o bölge için üç modelin
-(sınıflandırma, zaman serisi, anomali tespiti) çıktısını görebilirsiniz.
+Harita üzerinde bir grid hücresine tıklayarak, o bölge için dört modelin
+(yangın olasılığı, sınıflandırma, zaman serisi, anomali tespiti) çıktısını
+görebilirsiniz.
 """
 
 import streamlit as st
@@ -12,8 +13,10 @@ import joblib
 import sys
 import os
 sys.path.append(os.path.abspath('src/models'))
+sys.path.append(os.path.abspath('src'))
 from anomaly import calculate_zscore_features, flag_anomalies # type: ignore
 from forecaster import add_lag_features, FEATURE_COLUMNS as FORECASTER_FEATURES # type: ignore
+from features import build_latest_occurrence_features # type: ignore
 from streamlit_folium import st_folium
 
 st.set_page_config(page_title="Türkiye Orman Yangını Tespit Sistemi", layout="wide")
@@ -56,6 +59,14 @@ def load_data_with_anomaly_features():
     return df
 
 
+@st.cache_data
+def load_daily_summary():
+    """Ham günlük özet tabloyu okur (occurrence feature hesaplaması için)."""
+    df = pd.read_csv("data/processed/daily_grid_summary.csv")
+    df['date'] = pd.to_datetime(df['date'])
+    return df
+
+
 @st.cache_resource
 def load_classifier():
     """Kayıtlı sınıflandırma modelini yükler (Logistic Regression, ölçeklendirilmiş veri bekler)."""
@@ -72,6 +83,12 @@ def load_scaler():
 def load_forecaster():
     """Kayıtlı zaman serisi modelini yükler."""
     return joblib.load("outputs/models/forecaster.joblib")
+
+
+@st.cache_resource
+def load_occurrence_model():
+    """Kayıtlı yangın olasılığı modelini yükler (XGBoost, ölçeklendirme gerektirmez)."""
+    return joblib.load("outputs/models/occurrence.joblib")
 
 
 def get_latest_features(grid_id, df):
@@ -106,15 +123,34 @@ if map_data.get("last_object_clicked_tooltip"):
     matching_row = grid_points[grid_points['display_name'] == selected_display_name]
 
     if len(matching_row) > 0:
-        selected_grid = matching_row.iloc[0]['grid_id']
+        selected_grid_row = matching_row.iloc[0]
+        selected_grid = selected_grid_row['grid_id']
         st.success(f"Seçilen bölge: {selected_display_name}")
 
         full_data = pd.read_csv("data/processed/daily_grid_summary.csv")
         latest_row = get_latest_features(selected_grid, full_data)
 
-        if latest_row is not None:
-            col1, col2, col3 = st.columns(3)
+        col0, col1, col2, col3 = st.columns(4)
 
+        with col0:
+            st.subheader("🔥 Yangın Olasılığı")
+            daily_summary = load_daily_summary()
+            occ_features, target_date = build_latest_occurrence_features(
+                daily_summary,
+                grid_id=selected_grid,
+                grid_lat=selected_grid_row['grid_lat'],
+                grid_lon=selected_grid_row['grid_lon'],
+            )
+            occurrence_model = load_occurrence_model()
+            occurrence_columns = [
+                'grid_lat', 'grid_lon', 'month', 'day_of_year', 'is_summer',
+                'lag_1_occurred', 'rolling_7_occurrence_rate', 'rolling_30_occurrence_rate',
+            ]
+            probability = occurrence_model.predict_proba(occ_features[occurrence_columns])[0, 1]
+            st.metric("Yarınki Tahmini Risk", f"%{probability * 100:.1f}")
+            st.caption(f"Tahmin edilen gün: {target_date.date()}")
+
+        if latest_row is not None:
             with col1:
                 st.subheader("🎯 Risk Seviyesi")
                 classifier = load_classifier()
@@ -164,3 +200,5 @@ if map_data.get("last_object_clicked_tooltip"):
                             st.success(f"Normal aralıkta (z-score: {z_score:.2f})")
                 else:
                     st.info("Bu bölge için anomali verisi bulunamadı.")
+        else:
+            st.info("Bu bölge için hiç sıcak nokta tespiti kaydı yok -- sadece yangın olasılığı paneli gösterilebiliyor.")

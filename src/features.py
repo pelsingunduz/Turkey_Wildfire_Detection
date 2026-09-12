@@ -148,6 +148,54 @@ def add_occurrence_lag_features(panel):
     return panel
 
 
+def build_latest_occurrence_features(daily_summary_df, grid_id, grid_lat, grid_lon,
+                                      as_of_date=None, window_days=30):
+    """SERVING (dashboard) zamanı için: tek bir grid hücresi için YARININ yangın
+    olasılığı tahmininde kullanılacak feature'ları, 1.4M satırlık tam paneli
+    diske kaydetmeden/yüklemeden hesaplar.
+
+    Bu, forecaster.py/anomaly.py'ın dashboard'da zaten yaptığı "eğitim ile
+    serving'i ayırma" prensibinin occurrence modeli için karşılığıdır --
+    full_panel_daily.csv büyük olduğu için (.gitignore'da) deploy edilen
+    ortamda bulunmayabilir; bu fonksiyon yalnızca küçük daily_grid_summary.csv'yi
+    kullanarak aynı feature'ları anlık üretir.
+
+    as_of_date: 'bugün' kabul edilecek tarih (varsayılan: veri setindeki en
+    son tarih). Tahmin, as_of_date + 1 gün için yapılır.
+    """
+    daily_summary_df = daily_summary_df.copy()
+    daily_summary_df['date'] = pd.to_datetime(daily_summary_df['date'])
+
+    if as_of_date is None:
+        as_of_date = daily_summary_df['date'].max()
+    as_of_date = pd.to_datetime(as_of_date)
+    target_date = as_of_date + pd.Timedelta(days=1)
+
+    window_start = as_of_date - pd.Timedelta(days=window_days - 1)
+    window_dates = pd.DataFrame({'date': pd.date_range(window_start, as_of_date, freq='D')})
+
+    grid_history = daily_summary_df[daily_summary_df['grid_id'] == grid_id][['date', 'fire_count']]
+    window_df = window_dates.merge(grid_history, on='date', how='left')
+    window_df['fire_count'] = window_df['fire_count'].fillna(0)
+    window_df['fire_occurred'] = (window_df['fire_count'] > 0).astype(int)
+
+    lag_1_occurred = window_df.iloc[-1]['fire_occurred']
+    rolling_7 = window_df.tail(7)['fire_occurred'].mean()
+    rolling_30 = window_df.tail(30)['fire_occurred'].mean()
+
+    features = pd.DataFrame([{
+        'grid_lat': grid_lat,
+        'grid_lon': grid_lon,
+        'month': target_date.month,
+        'day_of_year': target_date.dayofyear,
+        'is_summer': int(target_date.month in [6, 7, 8]),
+        'lag_1_occurred': lag_1_occurred,
+        'rolling_7_occurrence_rate': rolling_7,
+        'rolling_30_occurrence_rate': rolling_30,
+    }])
+    return features, target_date
+
+
 def run_occurrence_panel_pipeline():
     """Yangın olasılığı modeli için ayrı, tam panel pipeline'ı.
     Mevcut run_pipeline()'dan (şiddet/anomali modelleri için) bağımsızdır --
