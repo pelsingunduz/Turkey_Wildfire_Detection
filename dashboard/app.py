@@ -12,6 +12,11 @@ import folium
 import joblib
 import sys
 import os
+from dotenv import load_dotenv
+from openai import OpenAI
+
+load_dotenv()
+
 sys.path.append(os.path.abspath('src/models'))
 sys.path.append(os.path.abspath('src'))
 from anomaly import calculate_zscore_features, flag_anomalies # type: ignore
@@ -19,8 +24,83 @@ from forecaster import add_lag_features, FEATURE_COLUMNS as FORECASTER_FEATURES 
 from features import build_latest_occurrence_features # type: ignore
 from streamlit_folium import st_folium
 
+@st.cache_resource
+def get_openai_client():
+    """OpenAI istemcisini bir kere oluşturur (OPENAI_API_KEY ortam değişkeninden
+    otomatik okunur)."""
+    return OpenAI()
+
+
+@st.cache_data
+def generate_llm_explanation(region_name, target_date_str, probability_pct,
+                              severity, ts_prediction, z_score, is_anomaly):
+    """Sonuçları OpenAI ile doğal, sade bir Türkçe açıklamaya çevirir.
+
+    @st.cache_data, aynı girdi kombinasyonu (aynı bölge + aynı gün + aynı
+    sayılar) için sonucu önbellekte tutar -- aynı bölgeye aynı gün tekrar
+    tıklanırsa API'ye tekrar istek gitmez, hem hızlı hem ucuz olur."""
+    client = get_openai_client()
+
+    facts = (
+        f"- Bölge: {region_name}\n"
+        f"- Tahmin edilen gün: {target_date_str}\n"
+        f"- Yangın olasılığı: %{probability_pct:.1f}\n"
+        f"- Şiddet sınıfı (varsa, en son tespite göre): {severity or 'veri yok'}\n"
+        f"- Zaman serisi tahmini (varsa): "
+        f"{f'{ts_prediction:.1f} sıcak nokta' if ts_prediction is not None else 'veri yok'}\n"
+        f"- Anomali durumu (varsa): "
+        f"{(('anomali' if is_anomaly else 'normal') + f' (z-score: {z_score:.2f})') if z_score is not None else 'veri yok'}"
+    )
+
+    response = client.chat.completions.create(
+        model="gpt-4.1-nano",
+        messages=[
+            {"role": "system", "content": (
+                "Sen bir orman yangını erken uyarı sisteminde, teknik bilgisi "
+                "olmayan kullanıcılara sonuçları açıklayan bir asistansın. "
+                "Sana verilen sayısal tahminleri 2-4 cümlelik sade, doğal "
+                "Türkçe ile açıkla. Abartma, kesinlik iddia etme (bunlar "
+                "tahmin modelleri, kesin bilgi değil). 'Veri yok' olan "
+                "kısımlardan hiç bahsetme, sadece mevcut olanları anlat."
+            )},
+            {"role": "user", "content": facts},
+        ],
+        max_completion_tokens=200,
+        temperature=0.4,
+    )
+    content = response.choices[0].message.content
+    if not content or not content.strip():
+        raise ValueError("LLM boş cevap döndürdü")
+    return content
+
+
 st.set_page_config(page_title="Türkiye Orman Yangını Tespit Sistemi", layout="wide")
 st.title("🔥 Türkiye Orman Yangını Erken Tespit Sistemi")
+
+with st.expander("ℹ️ Bu sistem ne yapıyor? (açıklama için tıklayın)", expanded=False):
+    st.markdown("""
+    Bu sistem, NASA'nın **FIRMS** uydu verisini kullanarak Türkiye genelinde,
+    ~27km × 21km'lik hücrelere (grid) bölünmüş bölgeler için orman yangını
+    riskini **dört farklı açıdan** tahmin eder:
+
+    - 🔥 **Yangın Olasılığı** — Seçtiğiniz bölgede *yarın* en az bir yangın
+      tespit edilme ihtimali (yüzde olarak). Geçmiş aktiviteye ve mevsime
+      (yaz ayları daha riskli) dayanır.
+    - 🎯 **Risk Seviyesi** — Bölgede *daha önce* tespit edilmiş en güncel
+      yangının ne kadar ciddi olduğu (düşük / orta / yüksek).
+    - 📈 **Zaman Serisi Tahmini** — Geçmiş verilere bakarak, bir sonraki gün
+      beklenen sıcak nokta (hotspot) sayısı.
+    - 🚨 **Anomali Durumu** — Bölgenin bugünkü aktivitesinin, kendi geçmiş
+      ortalamasından ne kadar saptığı (istatistiksel olarak sıra dışı mı).
+
+    **Nasıl kullanılır:** Haritanın üzerinde gezinin — kırmızı noktalar
+    sadece fareniz üzerlerine geldiğinde görünür. İlgilendiğiniz bölgeye
+    tıklayın, sonuçlar altta görünecek.
+
+    ⚠️ **Bilinmesi gerekenler:** Bu bir portföy/öğrenme projesidir, resmi
+    bir afet yönetim aracı değildir. Bir grid hücresi bazen birden fazla
+    il/ilçeyi kapsayabildiği için bölge isimleri yaklaşıktır.
+    """)
 
 
 @st.cache_data
@@ -158,75 +238,139 @@ if map_data.get("last_object_clicked_tooltip"):
         full_data = pd.read_csv("data/processed/daily_grid_summary.csv")
         latest_row = get_latest_features(selected_grid, full_data)
 
+        # --- Tüm hesaplamaları önce yap (gösterimden bağımsız) ---
+
+        # 1) Yangın olasılığı -- her zaman hesaplanabilir
+        daily_summary = load_daily_summary()
+        occ_features, target_date = build_latest_occurrence_features(
+            daily_summary,
+            grid_id=selected_grid,
+            grid_lat=selected_grid_row['grid_lat'],
+            grid_lon=selected_grid_row['grid_lon'],
+        )
+        occurrence_model = load_occurrence_model()
+        occurrence_columns = [
+            'grid_lat', 'grid_lon', 'month', 'day_of_year', 'is_summer',
+            'lag_1_occurred', 'rolling_7_occurrence_rate', 'rolling_30_occurrence_rate',
+        ]
+        probability = occurrence_model.predict_proba(occ_features[occurrence_columns])[0, 1]
+
+        # 2) Risk seviyesi (şiddet) -- sadece geçmiş tespiti varsa
+        severity_prediction = None
+        if latest_row is not None:
+            classifier = load_classifier()
+            scaler = load_scaler()
+            features = latest_row[['avg_brightness', 'avg_frp', 'max_frp']].values.reshape(1, -1)
+            features_scaled = scaler.transform(features)
+            severity_prediction = classifier.predict(features_scaled)[0]
+
+        # 3) Zaman serisi tahmini -- yeterli lag verisi varsa
+        ts_prediction = None
+        latest_lag_row = None
+        if latest_row is not None:
+            data_with_lag = load_data_with_lag_features()
+            grid_lag_data = data_with_lag[data_with_lag['grid_id'] == selected_grid].sort_values('date')
+            if len(grid_lag_data) > 0:
+                latest_lag_row = grid_lag_data.iloc[-1]
+                if not pd.isna(latest_lag_row['lag_1_fire_count']):
+                    forecaster = load_forecaster()
+                    ts_features = latest_lag_row[FORECASTER_FEATURES].values.reshape(1, -1)
+                    ts_prediction = forecaster.predict(ts_features)[0]
+
+        # 4) Anomali durumu -- yeterli geçmiş varsa
+        z_score = None
+        is_anomaly = None
+        if latest_row is not None:
+            anomaly_data = load_data_with_anomaly_features()
+            grid_anomaly_data = anomaly_data[anomaly_data['grid_id'] == selected_grid].sort_values('date')
+            if len(grid_anomaly_data) > 0:
+                latest_anomaly_row = grid_anomaly_data.iloc[-1]
+                if not pd.isna(latest_anomaly_row['z_score']):
+                    z_score = latest_anomaly_row['z_score']
+                    is_anomaly = latest_anomaly_row['is_anomaly']
+
+        # --- Doğal dilde özet ---
+        summary = (
+            f"**{selected_display_name}** bölgesinde yarın (**{target_date.date()}**) "
+            f"yangın çıkma ihtimali **%{probability * 100:.1f}**. "
+        )
+        if latest_row is not None:
+            summary += (
+                f"Bu bölgede en son **{latest_row['date']}** tarihinde bir tespit oldu ve "
+                f"şiddeti **{severity_prediction}** olarak sınıflandırıldı. "
+            )
+            if ts_prediction is not None:
+                summary += f"Yarın için tahmini **{ts_prediction:.1f}** sıcak nokta bekleniyor. "
+            if z_score is not None:
+                if is_anomaly:
+                    summary += f"Bu, bölgenin normal seviyesinin **belirgin şekilde üzerinde** (z-score: {z_score:.2f})."
+                else:
+                    summary += f"Bu, bölgenin normal aktivite aralığında (z-score: {z_score:.2f})."
+        else:
+            summary += "Bu bölgede daha önce hiç sıcak nokta tespiti kaydedilmemiş, bu yüzden diğer üç panel için yeterli veri yok."
+
+        try:
+            llm_explanation = generate_llm_explanation(
+                region_name=selected_display_name,
+                target_date_str=str(target_date.date()),
+                probability_pct=probability * 100,
+                severity=severity_prediction,
+                ts_prediction=ts_prediction,
+                z_score=z_score,
+                is_anomaly=is_anomaly,
+            )
+            st.info(f"🤖 {llm_explanation}")
+        except Exception as e:
+            st.info(summary)
+            st.caption(f"(LLM açıklaması şu an alınamıyor, yukarıda şablon özet gösteriliyor. Hata: {e})")
+
+        # --- Panel gösterimi ---
         col0, col1, col2, col3 = st.columns(4)
 
         with col0:
             st.subheader("🔥 Yangın Olasılığı")
-            daily_summary = load_daily_summary()
-            occ_features, target_date = build_latest_occurrence_features(
-                daily_summary,
-                grid_id=selected_grid,
-                grid_lat=selected_grid_row['grid_lat'],
-                grid_lon=selected_grid_row['grid_lon'],
+            st.metric(
+                "Yarınki Tahmini Risk", f"%{probability * 100:.1f}",
+                help="Bu bölgede yarın en az bir sıcak nokta tespit edilme ihtimali. "
+                     "Geçmiş aktivite ve mevsimsel örüntülere dayanır (yaz ayları daha riskli). "
+                     "%0 kesinlikle olmayacağı, %100 kesinlikle olacağı anlamına gelmez."
             )
-            occurrence_model = load_occurrence_model()
-            occurrence_columns = [
-                'grid_lat', 'grid_lon', 'month', 'day_of_year', 'is_summer',
-                'lag_1_occurred', 'rolling_7_occurrence_rate', 'rolling_30_occurrence_rate',
-            ]
-            probability = occurrence_model.predict_proba(occ_features[occurrence_columns])[0, 1]
-            st.metric("Yarınki Tahmini Risk", f"%{probability * 100:.1f}")
             st.caption(f"Tahmin edilen gün: {target_date.date()}")
 
         if latest_row is not None:
             with col1:
                 st.subheader("🎯 Risk Seviyesi")
-                classifier = load_classifier()
-                scaler = load_scaler()
-                features = latest_row[['avg_brightness', 'avg_frp', 'max_frp']].values.reshape(1, -1)
-                features_scaled = scaler.transform(features)
-                prediction = classifier.predict(features_scaled)[0]
-                st.metric("Tahmini Risk", prediction)
+                st.metric(
+                    "Tahmini Risk", severity_prediction,
+                    help="Bu bölgede EN SON tespit edilen yangının şiddeti (düşük/orta/yüksek). "
+                         "Yeni bir tahmin değil, geçmişteki en güncel tespitin sınıflandırmasıdır."
+                )
                 st.caption(f"Bu bölgede son sıcak nokta tespiti: {latest_row['date']}")
 
             with col2:
                 st.subheader("📈 Zaman Serisi Tahmini")
-                data_with_lag = load_data_with_lag_features()
-                grid_lag_data = data_with_lag[data_with_lag['grid_id'] == selected_grid].sort_values('date')
-
-                if len(grid_lag_data) > 0:
-                    latest_lag_row = grid_lag_data.iloc[-1]
-
-                    if pd.isna(latest_lag_row['lag_1_fire_count']):
-                        st.info("Bu bölge için henüz yeterli geçmiş veri yok (en az 2 gün gerekiyor).")
-                    else:
-                        forecaster = load_forecaster()
-                        ts_features = latest_lag_row[FORECASTER_FEATURES].values.reshape(1, -1)
-                        ts_prediction = forecaster.predict(ts_features)[0]
-                        st.metric("Tahmini Sonraki Gün", f"{ts_prediction:.1f} sıcak nokta")
-                        st.caption(f"Dünkü değer: {latest_lag_row['lag_1_fire_count']:.0f}")
+                if ts_prediction is not None:
+                    st.metric(
+                        "Tahmini Sonraki Gün", f"{ts_prediction:.1f} sıcak nokta",
+                        help="Geçmiş sıcak nokta sayılarına bakarak, bir sonraki gün için "
+                             "beklenen sıcak nokta sayısı (regresyon modeli)."
+                    )
+                    st.caption(f"Dünkü değer: {latest_lag_row['lag_1_fire_count']:.0f}")
                 else:
-                    st.info("Bu bölge için zaman serisi verisi bulunamadı.")
+                    st.info("Bu bölge için henüz yeterli geçmiş veri yok (en az 2 gün gerekiyor).")
 
             with col3:
                 st.subheader("🚨 Anomali Durumu")
-                anomaly_data = load_data_with_anomaly_features()
-                grid_anomaly_data = anomaly_data[anomaly_data['grid_id'] == selected_grid].sort_values('date')
-
-                if len(grid_anomaly_data) > 0:
-                    latest_anomaly_row = grid_anomaly_data.iloc[-1]
-
-                    if pd.isna(latest_anomaly_row['z_score']):
-                        st.info("Bu bölge için henüz yeterli geçmiş veri yok (en az 3 gün gerekiyor).")
+                if z_score is not None:
+                    if is_anomaly:
+                        st.error(f"⚠️ Anomali tespit edildi! (z-score: {z_score:.2f})")
                     else:
-                        z_score = latest_anomaly_row['z_score']
-                        is_anomaly = latest_anomaly_row['is_anomaly']
-
-                        if is_anomaly:
-                            st.error(f"⚠️ Anomali tespit edildi! (z-score: {z_score:.2f})")
-                        else:
-                            st.success(f"Normal aralıkta (z-score: {z_score:.2f})")
+                        st.success(f"Normal aralıkta (z-score: {z_score:.2f})")
+                    st.caption(
+                        "z-score, bugünkü aktivitenin bölgenin kendi geçmiş ortalamasından "
+                        "kaç standart sapma uzakta olduğunu gösterir. |z| ≥ 3 anomali sayılır."
+                    )
                 else:
-                    st.info("Bu bölge için anomali verisi bulunamadı.")
+                    st.info("Bu bölge için henüz yeterli geçmiş veri yok (en az 3 gün gerekiyor).")
         else:
             st.info("Bu bölge için hiç sıcak nokta tespiti kaydı yok -- sadece yangın olasılığı paneli gösterilebiliyor.")

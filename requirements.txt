@@ -13,3 +13,4 @@ shapely
 geopy
 
 xgboost
+openai
