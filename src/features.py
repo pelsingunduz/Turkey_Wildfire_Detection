@@ -66,6 +66,113 @@ def build_daily_summary(df):
     return summary
 
 
+# ---------------------------------------------------------------------------
+# Yangın OLASILIĞI modeli için: tam panel (grid x takvim günü)
+#
+# build_daily_summary() sadece en az 1 tespit olan grid-gün kombinasyonlarını
+# üretir; yangınsız günler tabloda hiç yer almaz. "Yarın bu hücrede yangın
+# çıkar mı?" sorusuna cevap verebilmek için, yangın OLMAYAN günlerin de
+# (fire_count=0 ile) veri setinde bulunması gerekir.
+#
+# ÖNEMLİ: avg_brightness/avg_frp/max_frp gibi "ancak tespit olduğunda ölçülen"
+# feature'lar bu panelde YOK -- bunları olasılık modelinde kullanmak target
+# leakage olurdu (bir ölçüm varsa zaten yangın var demektir). Bunun yerine
+# sadece geçmişe dayalı (lag/rolling) ve takvimsel feature'lar kullanılır.
+# ---------------------------------------------------------------------------
+
+def build_full_panel(with_grid_df, daily_summary_df):
+    """Her grid hücresi x her takvim günü kombinasyonunu içeren tam panel oluşturur.
+    Yangın olmayan gün/hücre çiftlerinde fire_count=0 olur.
+
+    Not: Sadece 3 yıllık veri setinde EN AZ BİR KEZ tespit edilmiş grid hücreleri
+    kullanılır (Türkiye'nin tamamı değil) -- bu, projenin basit tutulma
+    prensibiyle uyumlu bir kapsam sınırlamasıdır."""
+    grid_cells = with_grid_df[['grid_id', 'grid_lat', 'grid_lon']].drop_duplicates()
+    all_dates = pd.date_range(
+        start=with_grid_df['acq_datetime_tr'].dt.date.min(),
+        end=with_grid_df['acq_datetime_tr'].dt.date.max(),
+        freq='D'
+    ).date
+
+    # Cross join: her hücre x her gün
+    grid_cells['_key'] = 1
+    dates_df = pd.DataFrame({'date': all_dates, '_key': 1})
+    panel = grid_cells.merge(dates_df, on='_key').drop(columns='_key')
+
+    panel = panel.merge(
+        daily_summary_df[['grid_id', 'date', 'fire_count']],
+        on=['grid_id', 'date'],
+        how='left'
+    )
+    panel['fire_count'] = panel['fire_count'].fillna(0).astype(int)
+    panel['fire_occurred'] = (panel['fire_count'] > 0).astype(int)
+
+    print(f"[build_full_panel] {len(grid_cells)} hücre x {len(all_dates)} gün = {len(panel)} satır")
+    print(f"[build_full_panel] Yangın oranı: {panel['fire_occurred'].mean():.2%}")
+    return panel
+
+
+def add_calendar_features(panel):
+    """Ay ve yılın günü gibi mevsimsel feature'lar ekler.
+    Türkiye'de yangın mevsimi yaz aylarında yoğunlaştığı için bunlar güçlü
+    bir sinyal olması beklenir."""
+    panel = panel.copy()
+    panel['date'] = pd.to_datetime(panel['date'])
+    panel['month'] = panel['date'].dt.month
+    panel['day_of_year'] = panel['date'].dt.dayofyear
+    panel['is_summer'] = panel['month'].isin([6, 7, 8]).astype(int)
+    print(f"[add_calendar_features] tamamlandı")
+    return panel
+
+
+def add_occurrence_lag_features(panel):
+    """Geçmişe dayalı (leakage'sız) feature'lar ekler.
+    shift(1) ile bugün HARİÇ tutulur -- rolling pencere de shift edilmiş
+    seri üzerinden hesaplanır, yani bugünün kendisi asla feature'a sızmaz."""
+    panel = panel.copy()
+    panel = panel.sort_values(['grid_id', 'date']).reset_index(drop=True)
+
+    shifted = panel.groupby('grid_id')['fire_occurred'].shift(1)
+    panel['lag_1_occurred'] = shifted
+
+    panel['rolling_7_occurrence_rate'] = (
+        panel.groupby('grid_id')['fire_occurred']
+        .transform(lambda x: x.shift(1).rolling(window=7, min_periods=1).mean())
+    )
+    panel['rolling_30_occurrence_rate'] = (
+        panel.groupby('grid_id')['fire_occurred']
+        .transform(lambda x: x.shift(1).rolling(window=30, min_periods=1).mean())
+    )
+
+    print(f"[add_occurrence_lag_features] tamamlandı")
+    return panel
+
+
+def run_occurrence_panel_pipeline():
+    """Yangın olasılığı modeli için ayrı, tam panel pipeline'ı.
+    Mevcut run_pipeline()'dan (şiddet/anomali modelleri için) bağımsızdır --
+    daily_grid_summary.csv'ye dokunmaz."""
+    raw = load_raw_files()
+    clean = remove_duplicates(raw)
+    turkey_only = filter_turkey_boundary(clean)
+    with_time = fix_datetime(turkey_only)
+    with_grid = assign_grid(with_time)
+    daily_summary = build_daily_summary(with_grid)
+
+    # daily_summary'nin 'date' sütunu datetime.date, panel de aynı tipte olmalı
+    panel = build_full_panel(with_grid, daily_summary)
+    panel = add_calendar_features(panel)
+    panel = add_occurrence_lag_features(panel)
+
+    # İlk satırlar (lag_1_occurred NaN) kullanılamaz -- her hücrenin ilk günü
+    panel_clean = panel.dropna(subset=['lag_1_occurred']).reset_index(drop=True)
+    print(f"[run_occurrence_panel_pipeline] Modelde kullanılabilir: {len(panel_clean)} / {len(panel)} satır")
+
+    panel_clean.to_csv("data/processed/full_panel_daily.csv", index=False)
+    print("[run_occurrence_panel_pipeline] Kaydedildi: data/processed/full_panel_daily.csv")
+    return panel_clean
+
+
 def run_pipeline():
     raw = load_raw_files()
     clean = remove_duplicates(raw)
@@ -81,3 +188,4 @@ def run_pipeline():
 
 if __name__ == "__main__":
     run_pipeline()
+    run_occurrence_panel_pipeline()

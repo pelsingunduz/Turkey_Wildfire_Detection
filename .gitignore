@@ -16,3 +16,14 @@ __pycache__/
 # Mac sistem dosyası
 .DS_Store
 cron.log
+
+# Model dosyaları (kod ile yeniden üretilebilir, sadece resmi/küçük modeller commit'lenir)
+outputs/models/classifier_rf.joblib
+outputs/models/classifier_knn.joblib
+outputs/models/classifier_svm.joblib
+outputs/models/classifier_xgb.joblib
+outputs/models/occurrence_rf.joblib
+outputs/models/occurrence_xgb.joblib
+outputs/models/occurrence_lr.joblib
+outputs/models/occurrence_scaler.joblib
+data/processed/full_panel_daily.csv
