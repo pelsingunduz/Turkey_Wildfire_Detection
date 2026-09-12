@@ -87,9 +87,22 @@ def generate_llm_explanation(region_name, target_date_str, probability_pct,
 
 
 st.set_page_config(page_title="Türkiye Orman Yangını Tespit Sistemi", layout="wide")
+
+
+def load_css(path="dashboard/style.css"):
+    """Görsel stil dosyasını okuyup enjekte eder (bkz. dashboard/style.css)."""
+    with open(path) as f:
+        return f.read()
+
+
+st.markdown(
+    '<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">',
+    unsafe_allow_html=True
+)
+st.markdown(f"<style>{load_css()}</style>", unsafe_allow_html=True)
 st.title("🔥 Türkiye Orman Yangını Erken Tespit Sistemi")
 
-with st.expander("ℹ️ Bu sistem ne yapıyor? (açıklama için tıklayın)", expanded=False):
+with st.expander("**📍 Bu sistem ne yapıyor?**", expanded=True):
     st.markdown("""
     Bu sistem, NASA'nın **FIRMS** uydu verisini kullanarak Türkiye genelinde,
     ~27km × 21km'lik hücrelere (grid) bölünmüş bölgeler için orman yangını
@@ -337,10 +350,21 @@ if map_data.get("last_object_clicked_tooltip"):
             st.info(summary)
             st.caption(f"(LLM açıklaması şu an alınamıyor, yukarıda şablon özet gösteriliyor. Hata: {e})")
 
+        # Panellerin üst şeritleri için renkler -- keyfi değil, zaten var olan
+        # kategorilerden türetiliyor (classifier.py'daki düşük/orta/yüksek,
+        # anomaly.py'daki is_anomaly eşiği).
+        SEVERITY_COLORS = {'düşük': '#4C8C6B', 'orta': '#E8590C', 'yüksek': '#C7361B'}
+        severity_color = SEVERITY_COLORS.get(severity_prediction, '#E8590C')
+        if z_score is not None:
+            anomaly_color = '#C7361B' if is_anomaly else '#4C8C6B'
+        else:
+            anomaly_color = '#5A6660'
+
         # --- Panel gösterimi ---
         col0, col1, col2, col3 = st.columns(4)
 
         with col0:
+            st.markdown('<div class="panel-accent" style="border-top-color:#E8590C;"></div>', unsafe_allow_html=True)
             st.subheader("🔥 Yangın Olasılığı")
             st.metric(
                 "Yarınki Tahmini Risk", f"%{probability * 100:.1f}",
@@ -352,6 +376,7 @@ if map_data.get("last_object_clicked_tooltip"):
 
         if latest_row is not None:
             with col1:
+                st.markdown(f'<div class="panel-accent" style="border-top-color:{severity_color};"></div>', unsafe_allow_html=True)
                 st.subheader("🎯 Risk Seviyesi")
                 st.metric(
                     "Tahmini Risk", severity_prediction,
@@ -361,6 +386,7 @@ if map_data.get("last_object_clicked_tooltip"):
                 st.caption(f"Bu bölgede son sıcak nokta tespiti: {latest_row['date']}")
 
             with col2:
+                st.markdown('<div class="panel-accent" style="border-top-color:#4C8C6B;"></div>', unsafe_allow_html=True)
                 st.subheader("📈 Zaman Serisi Tahmini")
                 if ts_prediction is not None:
                     st.metric(
@@ -373,6 +399,7 @@ if map_data.get("last_object_clicked_tooltip"):
                     st.info("Bu bölge için henüz yeterli geçmiş veri yok (en az 2 gün gerekiyor).")
 
             with col3:
+                st.markdown(f'<div class="panel-accent" style="border-top-color:{anomaly_color};"></div>', unsafe_allow_html=True)
                 st.subheader("🚨 Anomali Durumu")
                 if z_score is not None:
                     if is_anomaly:

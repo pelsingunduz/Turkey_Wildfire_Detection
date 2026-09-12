@@ -1,0 +1,53 @@
+/* Türkiye Orman Yangını Erken Tespit Sistemi -- görsel stil
+ *
+ * Renk paleti, konuya dayalı ve anlam taşıyor (dekoratif değil):
+ * - Kor turuncusu (#E8590C): ısı/yangın verisi
+ * - Çam yeşili (#4C8C6B): normal/güvenli durum
+ * - Alarm kırmızısı (#C7361B): anomali/yüksek risk
+ *
+ * Sayısal göstergeler (yüzde, z-score, sıcak nokta sayısı) monospace
+ * fontla -- bunlar gerçek uydu telemetrisi olduğu için "enstrüman paneli"
+ * hissi kazandırıyor.
+ */
+
+/* Font, Google Fonts <link> etiketiyle ayrıca yükleniyor (bkz. dashboard/app.py) --
+ * @import burada KULLANILMIYOR çünkü Streamlit'in enjekte edilen <style>
+ * bloklarında @import bazen düzgün parse edilmiyor (sayfada metin sızıntısına
+ * yol açtı, bkz. proje notları). */
+
+ html, body, [class*="css"] {
+    font-family: 'IBM Plex Sans', sans-serif;
+}
+
+/* Streamlit'in varsayılan üst boşluğu gereğinden fazla -- daralt */
+.block-container {
+    padding-top: 2rem !important;
+}
+
+div[data-testid="stMetricValue"] {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    white-space: normal !important;
+    overflow-wrap: break-word !important;
+    overflow: visible !important;
+    text-overflow: unset !important;
+    line-height: 1.15;
+}
+
+div[data-testid="stMetricValue"] * {
+    white-space: normal !important;
+    overflow-wrap: break-word !important;
+    text-overflow: unset !important;
+}
+
+/* Panel üst şeritleri -- rengi Python tarafında inline style ile ayarlanıyor
+ * (durum verisine göre değiştiği için), burada sadece ortak stil tanımlı. */
+.panel-accent {
+    border-top: 3px solid #E8590C;
+    margin-bottom: 0.5rem;
+}
+
+/* Açılır "Bu sistem ne yapıyor?" kutusunun başlığını büyüt */
+summary, summary p, summary strong {
+    font-size: 1.4rem !important;
+}
