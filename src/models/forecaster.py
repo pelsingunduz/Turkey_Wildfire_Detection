@@ -15,13 +15,20 @@ değerlendirilmelidir.
 
 Split KRONOLOJİK yapılır (rastgele değil) — modelin geleceği bilerek
 eğitilmesini (data leakage) önlemek için.
-"""
 
+NEGATİF TAHMİN UYARISI: LinearRegression, çıktısını 0'da sınırlamaz --
+matematiksel olarak negatif bir "sıcak nokta sayısı" tahmini üretebilir,
+ki bu anlamsızdır (sayım asla negatif olamaz). Bu modülün ürettiği HER
+tahmin, kullanılmadan önce np.clip(tahmin, 0, None) ile sıfırın altına
+düşürülmemelidir -- bkz. train_and_evaluate() ve dashboard/app.py'daki
+kullanım. Modelin kendisi (joblib'e kaydedilen haliyle) bunu otomatik
+yapmaz, her çağıran kod bunu kendisi uygulamalı.
+"""
+import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error
 import joblib
-
 
 FEATURE_COLUMNS = ['lag_1_fire_count', 'rolling_3_avg']
 
@@ -31,10 +38,8 @@ def add_lag_features(df):
     df = df.copy()
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values(['grid_id', 'date']).reset_index(drop=True)
-
     # shift(1): aynı grid_id içinde bir önceki satırın değerini getirir (dünkü değer)
     df['lag_1_fire_count'] = df.groupby('grid_id')['fire_count'].shift(1)
-
     # rolling(3, min_periods=1): son 3 günün ortalaması, veri azsa eldekiyle hesaplanır
     df['rolling_3_avg'] = (
         df.groupby('grid_id')['fire_count']
@@ -47,11 +52,9 @@ def prepare_data(daily_summary_path="data/processed/daily_grid_summary.csv"):
     """Günlük özet tabloyu okur, lag feature ekler, geçmişi olmayan (NaN) satırları eler."""
     df = pd.read_csv(daily_summary_path)
     df = add_lag_features(df)
-
     # lag_1_fire_count NaN olan satırlar (geçmişi olmayan, tek-günlük hücreler) kullanılamaz
     ts_data = df.dropna(subset=['lag_1_fire_count']).copy()
     ts_data = ts_data.sort_values('date').reset_index(drop=True)
-
     print(f"[prepare_data] Zaman serisi için kullanılabilir satır: {len(ts_data)}")
     return ts_data
 
@@ -68,18 +71,24 @@ def chronological_split(ts_data, test_ratio=0.2):
 
 def train_and_evaluate(train, test):
     """Linear Regression eğitir, MAE ile değerlendirir.
-    NOT: Küçük veri setinde MAE metriği güvenilir değildir (bkz. modül docstring'i)."""
+    NOT: Küçük veri setinde MAE metriği güvenilir değildir (bkz. modül docstring'i).
+    Tahminler, negatif sıcak nokta sayısı anlamsız olduğu için 0'da kırpılır."""
     X_train, y_train = train[FEATURE_COLUMNS], train['fire_count']
     X_test, y_test = test[FEATURE_COLUMNS], test['fire_count']
-
     model = LinearRegression()
     model.fit(X_train, y_train)
-
-    y_pred = model.predict(X_test)
+    y_pred = np.clip(model.predict(X_test), 0, None)
     mae = mean_absolute_error(y_test, y_pred)
     print(f"[train_and_evaluate] MAE: {mae:.2f} (küçük veri setiyle güvenilir değil)")
-
     return model
+
+
+def predict_clipped(model, X):
+    """Modelin tahminini alır ve negatif değerleri 0'a sabitler.
+    Dashboard dahil, bu modeli kullanan HER yer bu fonksiyonu (ya da aynı
+    np.clip mantığını) kullanmalı -- ham model.predict() negatif değer
+    üretebilir."""
+    return np.clip(model.predict(X), 0, None)
 
 
 def save_model(model, path="outputs/models/forecaster.joblib"):

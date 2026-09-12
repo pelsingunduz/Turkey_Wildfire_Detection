@@ -20,7 +20,7 @@ load_dotenv()
 sys.path.append(os.path.abspath('src/models'))
 sys.path.append(os.path.abspath('src'))
 from anomaly import calculate_zscore_features, flag_anomalies # type: ignore
-from forecaster import add_lag_features, FEATURE_COLUMNS as FORECASTER_FEATURES # type: ignore
+from forecaster import add_lag_features, predict_clipped, FEATURE_COLUMNS as FORECASTER_FEATURES # type: ignore
 from features import build_latest_occurrence_features # type: ignore
 from streamlit_folium import st_folium
 
@@ -275,7 +275,7 @@ if map_data.get("last_object_clicked_tooltip"):
                 if not pd.isna(latest_lag_row['lag_1_fire_count']):
                     forecaster = load_forecaster()
                     ts_features = latest_lag_row[FORECASTER_FEATURES].values.reshape(1, -1)
-                    ts_prediction = forecaster.predict(ts_features)[0]
+                    ts_prediction = predict_clipped(forecaster, ts_features)[0]
 
         # 4) Anomali durumu -- yeterli geçmiş varsa
         z_score = None
