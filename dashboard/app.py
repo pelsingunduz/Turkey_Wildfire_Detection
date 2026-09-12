@@ -17,6 +17,17 @@ from openai import OpenAI
 
 load_dotenv()
 
+# Streamlit Cloud'da .env dosyası yok -- key'ler yerine "Secrets" mekanizması
+# kullanılıyor (st.secrets). Yerelde .env'den zaten okunuyor; bulutta da
+# aynı os.environ üzerinden erişilebilmesi için buraya köprülüyoruz.
+# (Yerel geliştirmede secrets.toml olmadığı için st.secrets erişimi hata
+# verebilir -- bu yüzden try/except ile güvenli hale getiriyoruz.)
+try:
+    if "OPENAI_API_KEY" in st.secrets:
+        os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+except Exception:
+    pass
+
 sys.path.append(os.path.abspath('src/models'))
 sys.path.append(os.path.abspath('src'))
 from anomaly import calculate_zscore_features, flag_anomalies # type: ignore
