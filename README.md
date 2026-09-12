@@ -288,6 +288,5 @@ streamlit run dashboard/app.py
 - Zaman serisi ve anomali tespiti için de çoklu algoritma karşılaştırması
   (Random Forest Regressor, Isolation Forest gibi)
 
-<img width="1130" height="589" alt="Ekran Resmi 2026-09-12 15 24 31" src="https://github.com/user-attachments/assets/fdce683d-66c0-4cbd-8653-ec7f03f27eea" />
-<img width="1139" height="601" alt="Ekran Resmi 2026-09-12 15 24 19" src="https://github.com/user-attachments/assets/1cba0552-e300-4b42-913a-456dec82be83" />
 <img width="1145" height="603" alt="Ekran Resmi 2026-09-12 15 23 41" src="https://github.com/user-attachments/assets/7af7bda4-44df-4723-94ba-472e7ad9063d" />
+<img width="1139" height="601" alt="Ekran Resmi 2026-09-12 15 24 19" src="https://github.com/user-attachments/assets/1cba0552-e300-4b42-913a-456dec82be83" />
