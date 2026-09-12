@@ -16,13 +16,20 @@ BEŞ ALGORİTMA KARŞILAŞTIRMASI:
   ile ölçeklendirme YAPILIR (aksi halde avg_brightness ~300 civarı, avg_frp
   ~1-80 civarı olduğu için büyük ölçekli feature yapay olarak baskın çıkar)
 
-Küçük veri setinde (~260 satır) hiçbir algoritmanın kesin galip olması
-beklenmez -- amaç sistematik, veriye dayalı bir karşılaştırma sunmaktır.
+GÜNCELLEME (geçmiş veri backfill'i sonrası, ~46.000 satır): Resmi model
+Logistic Regression'dan XGBoost'a değişti. İlk karşılaştırma küçük bir
+veri setinde (~260 satır, test seti 52 satır) yapılmıştı ve o ölçekte
+basit bir doğrusal model karmaşık ağaç modellerini geçmişti (az veri,
+karmaşık modellerin overfitting'e daha yatkın olmasına yol açar). Veri
+~46.000 satıra çıkınca bu dengeler tersine döndü: XGBoost açık ara önde
+(accuracy 0.86, macro F1 0.78), Logistic Regression ise en düşük
+performansı gösterdi (accuracy 0.76, macro F1 0.64). Bu, "az veri basit
+modelleri, çok veri karmaşık modelleri kayırır" prensibinin ders kitabı
+gibi bir örneği.
 
-NOT: Karşılaştırma sonucunda dashboard'un resmi modeli Logistic Regression
-olarak seçildi (bkz. run() fonksiyonu). Bu, Logistic Regression'ın
-ölçeklendirilmiş (StandardScaler) veri beklediği anlamına gelir --
-dashboard'da tahmin yaparken scaler.joblib'in de yüklenmesi gerekir.
+ÖNEMLİ: XGBoost ölçeklendirme gerektirmediği için, dashboard'da bu model
+kullanılırken StandardScaler UYGULANMAMALI -- ham feature'lar doğrudan
+verilmeli (bkz. dashboard/app.py).
 """
 
 import pandas as pd
@@ -121,7 +128,8 @@ def run():
     evaluate_model("KNN", y_test, knn_model.predict(X_test_scaled), results)
     joblib.dump(knn_model, "outputs/models/classifier_knn.joblib")
 
-    # Scaler'ı da kaydet -- dashboard'da ölçeklendirilmiş modelleri kullanmak istersek gerekecek
+    # Scaler'ı da kaydet -- Logistic Regression/SVM/KNN varyantlarını
+    # denemek istersen hâlâ gerekecek (resmi model artık bunu kullanmıyor)
     joblib.dump(scaler, "outputs/models/scaler.joblib")
 
     # Karşılaştırma tablosu
@@ -131,13 +139,12 @@ def run():
     comparison_df = pd.DataFrame(results).sort_values('macro_f1', ascending=False)
     print(comparison_df.to_string(index=False))
 
-    # Dashboard'un kullandığı ana model: Logistic Regression.
-    # Karşılaştırma sonuçlarına göre seçildi (bkz. modül docstring'i ve
-    # KARŞILAŞTIRMA TABLOSU çıktısı) -- en yüksek accuracy/macro F1'e sahip,
-    # kritik sınıflardaki (orta/yüksek risk) recall'dan ödün vermeden daha
-    # az yanlış alarm üretiyor. NOT: test seti küçük (52 satır), bu karar
-    # veri arttıkça yeniden değerlendirilmelidir.
-    joblib.dump(lr_model, "outputs/models/classifier.joblib")
+    # Dashboard'un kullandığı ana model: XGBoost (bkz. modül docstring'i).
+    # ~46.000 satırlık veri setinde en yüksek accuracy (0.86) ve macro F1
+    # (0.78) değerine sahip. Ölçeklendirme GEREKTİRMEZ -- dashboard'da bu
+    # modelle tahmin yaparken scaler.joblib kullanılmamalı, ham feature'lar
+    # doğrudan verilmeli.
+    joblib.dump(xgb_model, "outputs/models/classifier.joblib")
 
     return comparison_df
 

@@ -22,6 +22,7 @@ sys.path.append(os.path.abspath('src'))
 from anomaly import calculate_zscore_features, flag_anomalies # type: ignore
 from forecaster import add_lag_features, predict_clipped, FEATURE_COLUMNS as FORECASTER_FEATURES # type: ignore
 from features import build_latest_occurrence_features # type: ignore
+from classifier import REVERSE_LABEL_MAP # type: ignore
 from streamlit_folium import st_folium
 
 @st.cache_resource
@@ -256,13 +257,14 @@ if map_data.get("last_object_clicked_tooltip"):
         probability = occurrence_model.predict_proba(occ_features[occurrence_columns])[0, 1]
 
         # 2) Risk seviyesi (şiddet) -- sadece geçmiş tespiti varsa
+        # NOT: Resmi model XGBoost (bkz. classifier.py) -- ölçeklendirme
+        # GEREKMEZ, sayısal kod döner (REVERSE_LABEL_MAP ile string'e çevrilir).
         severity_prediction = None
         if latest_row is not None:
             classifier = load_classifier()
-            scaler = load_scaler()
             features = latest_row[['avg_brightness', 'avg_frp', 'max_frp']].values.reshape(1, -1)
-            features_scaled = scaler.transform(features)
-            severity_prediction = classifier.predict(features_scaled)[0]
+            severity_code = classifier.predict(features)[0]
+            severity_prediction = REVERSE_LABEL_MAP[severity_code]
 
         # 3) Zaman serisi tahmini -- yeterli lag verisi varsa
         ts_prediction = None
