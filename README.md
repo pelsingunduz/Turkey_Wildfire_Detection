@@ -96,10 +96,10 @@ Bu proje, her adımda bilinçli mühendislik kararları içeriyor:
   karşılaştırıldı. Ağaç tabanlı olmayan üç model (Logistic Regression, SVM,
   KNN) için `StandardScaler` ile ölçeklendirme uygulandı, çünkü bu
   algoritmalar feature büyüklüğünden etkileniyor. Dashboard'un resmi
-  modeli, karşılaştırma sonuçlarına göre **Logistic Regression** olarak
-  seçildi (bkz. Model Karşılaştırmaları — bu karşılaştırma küçük bir veri
-  setiyle yapıldı, geçmiş veri backfill'i sonrası yeniden değerlendirilmeyi
-  bekliyor).
+  modeli, karşılaştırma sonuçlarına göre **XGBoost** olarak seçildi. İlk
+  karşılaştırmada (küçük veri) Logistic Regression öndeydi, geçmiş veri
+  backfill'i sonrası (~46.000 satır) yapılan yeniden karşılaştırmada ise
+  XGBoost'a geçildi (bkz. Model Karşılaştırmaları).
 - **Anomali tespitinde sıfır-varyans düzeltmesi:** Bir grid hücresinin
   geçmişinde hiç varyans yoksa (örn. hep aynı sayıda tespit), z-score
   hesaplaması sıfıra bölme nedeniyle yapay olarak "sonsuz anomali"
@@ -151,19 +151,16 @@ recall'a sahip. Erken uyarı sisteminde kaçırılan bir yangının maliyeti
 yanlış alarmdan çok daha yüksek olduğu için düşük precision kasıtlı bir
 tercih.
 
-### Sınıflandırma (risk seviyesi) — ~260 satır (ilk veri seti), test seti: 52 satır
-
+### Sınıflandırma (risk seviyesi) — ~46.000 satır (geçmiş veri sonrası), test seti: 9.164 satır
 | Model | Accuracy | Macro F1 |
 |---|---|---|
-| Logistic Regression | 0.69 | 0.58 |
-| SVM | 0.65 | 0.53 |
-| Random Forest | 0.62 | 0.52 |
-| XGBoost | 0.60 | 0.51 |
-| KNN | 0.56 | 0.48 |
+| XGBoost | 0.86 | 0.78 |
+| Random Forest | 0.84 | 0.77 |
+| KNN | 0.80 | 0.71 |
+| SVM | 0.76 | 0.66 |
+| Logistic Regression | 0.76 | 0.64 |
 
-**Not:** Bu karşılaştırma, geçmiş veri backfill'inden ÖNCEKİ küçük veri
-setine dayanıyor. Artık aynı büyük veri setiyle (~46.000 satır) yeniden
-çalıştırılıp güncellenmesi gerekiyor — bkz. Gelecek Geliştirmeler.
+Resmi model XGBoost'a çevrildi. İlginç bir dönüş: küçük veri setinde (~260 satır) Logistic Regression kazanmıştı; veri ~46.000 satıra çıkınca sıralama tamamen tersine döndü — Logistic Regression şimdi sonuncu. Bu, "az veri basit modelleri, çok veri karmaşık modelleri kayırır" prensibinin doğrudan bir doğrulaması.
 
 ## Bilinen Sınırlamalar
 
@@ -173,11 +170,6 @@ setine dayanıyor. Artık aynı büyük veri setiyle (~46.000 satır) yeniden
 - **Bounding box, komşu ülkelerin sınır bölgelerini de içeriyordu**
   (Irak, Suriye, Yunanistan vb.); bu, `geopandas` ile point-in-polygon
   filtrelemesiyle giderildi.
-- **Sınıflandırma, zaman serisi ve anomali modelleri, geçmiş veri
-  backfill'i sonrası henüz yeniden eğitilip karşılaştırılmadı.** Bu üç
-  model teknik olarak artık büyük veri setiyle (GitHub Actions her 4
-  saatte bir yeniden eğitiyor) çalışıyor, ama algoritma seçimi kararları
-  hâlâ küçük veri setindeki karşılaştırmaya dayanıyor.
 - **Yangın olasılığı modelinin precision'ı düşük (~%20-33).** Bu kasıtlı
   bir tercih (yüksek recall'u önceliklendirme) ama pratikte "gerçek"
   alarmların çoğu yanlış alarm anlamına geliyor — dashboard kullanıcısı
