@@ -21,6 +21,8 @@ jobs:
         env:
           FIRMS_MAP_KEY: ${{ secrets.FIRMS_MAP_KEY }}
         run: python src/ingestion.py
+      - name: Hava durumu verisini güncelle
+        run: python src/weather_backfill.py
       - name: Veriyi işle (features)
         run: python src/features.py
       - name: Sınıflandırma modelini eğit

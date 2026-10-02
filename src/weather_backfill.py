@@ -1,274 +1,148 @@
 """
-Yangın OLASILIĞI modeli: Grid hücresi + gün bazlı tam panelden, o gün o
-hücrede yangın çıkıp çıkmayacağının olasılığını tahmin eder.
+İl bazlı hava durumu verisini Open-Meteo (archive-api) üzerinden çeker.
 
-classifier.py'dan farkı: classifier.py "yangın zaten varsa ne kadar ciddi"
-sorusuna cevap verir (sadece tespit edilmiş günlerle eğitilir). Bu modül
-"yangın çıkar mı" sorusuna cevap verir (tüm gün/hücre kombinasyonlarıyla
-eğitilir, yangınsız günler dahil).
+ARTIMLI (incremental) ÇALIŞIR: Her il için data/external/weather_by_province.csv'deki
+EN SON kayıtlı tarihi bulur, sadece ondan sonraki günleri ister. Bu script hem
+ilk büyük backfill (3 yıl) için hem de GitHub Actions'ta periyodik güncelleme
+için (sadece dünün verisini ekler) AYNI KODLA çalışır -- ayrı bir "backfill"
+ve "update" script'i tutmaya gerek yok.
 
-FEATURE SEÇİMİ -- TARGET LEAKAGE UYARISI: avg_brightness/avg_frp/max_frp gibi
-"ancak tespit olduğunda ölçülen" değerler BURADA KULLANILMAZ -- bunlar bir
-ölçüm varsa zaten yangın var demektir, dolambaçlı bir tautoloji olurdu.
-Bunun yerine sadece BUGÜNDEN ÖNCE bilinen şeyler kullanılır:
-- Coğrafi konum (grid_lat, grid_lon) -- her zaman bilinir
-- Takvimsel (month, day_of_year, is_summer) -- her zaman bilinir
-- Geçmişe dayalı (lag_1_occurred, rolling_7/30_occurrence_rate) -- shift(1)
-  ile hesaplandığı için bugünü hiç görmez (bkz. features.py)
-- İNSAN KAYNAKLI: population_density (ilin km² başına nüfusu, TÜİK) --
-  statik bir feature, her zaman bilinir (bkz. features.py:add_population_density)
+NEDEN İL BAZINDA (grid hücresi değil): bkz. weather_backfill.py'nin önceki
+sürümündeki açıklama -- hava durumu 0.25°'lik bir hücre çözünürlüğünde
+anlamlı şekilde değişmiyor, il merkezi (centroid) yeterli bir yaklaşıklık.
 
-İNSAN KAYNAKLI RİSK FAKTÖRÜ DEĞERLENDİRMESİ: population_density eklemeden
-ÖNCE ve SONRA aynı algoritma (XGBoost) ile ayrı ayrı eğitilip ROC-AUC
-karşılaştırılıyor (bkz. evaluate_population_density_impact) -- "bu feature
-gerçekten modeli iyileştiriyor mu" sorusu varsayıma değil ölçüme dayanıyor.
+SEÇİLEN DEĞİŞKENLER: Sıcaklık (max), yağış toplamı, rüzgar hızı (max) ve
+rüzgar yönü -- klasik "yangın hava durumu" dörtlüsü.
 
-SONUÇ (ölçüldü, varsayılmadı): population_density eklenince ROC-AUC
-0.9135 -> 0.9129'a düştü (-0.0007, ihmal edilebilir/gürültü düzeyinde).
-Yani bu feature modeli İYİLEŞTİRMEDİ. RESMİ MODELDE KULLANILMIYOR -- test
-kodu (evaluate_population_density_impact), bu değerlendirmeyi
-tekrarlanabilir kılmak için korunuyor.
+ERA5 GECİKMESİ: Open-Meteo'nun archive API'si ~5 gün gecikmeli güncelleniyor
+(resmi dokümantasyon). Yani "dün"ü istesek bile en güncel birkaç gün için
+veri dönmeyebilir -- bu durumda features.py:add_weather_features'daki
+ortalama ile doldurma mekanizması devreye girer, akış kesilmez.
 
-SENSÖR FÜZYONU (hava durumu): temp_max/precip_sum/wind_speed_max/
-wind_direction_dominant -- her ilin grid hücrelerinden hesaplanan merkez
-koordinat için Open-Meteo'dan çekilen günlük sıcaklık, yağış, rüzgar hızı
-ve yönü (bkz. features.py:add_weather_features, src/weather_backfill.py).
-Klasik "sıcak + kuru + rüzgarlı = yüksek risk" yangın-hava ilişkisini
-yakalaması bekleniyor.
-
-SONUÇ (ölçüldü): hava durumu eklenince ROC-AUC 0.9135 -> 0.9170'e çıktı
-(+0.0035, eşiğin üzerinde, ölçülebilir bir iyileşme). Bu yüzden RESMİ
-MODELDE KULLANILIYOR -- population_density'nin aksine, bu feature gerçek
-bir katkı sağladı.
-
-ÖLÇEK NEDENİYLE ALGORİTMA SEÇİMİ: Panel ~1.4 milyon satır içeriyor. SVM ve
-KNN bu ölçekte pratik değil (SVM saatler sürebilir, KNN tahmin anında çok
-yavaş). Sadece hızlı ölçeklenen algoritmalar karşılaştırılır: Random Forest,
-XGBoost, Logistic Regression.
-
-SINIF DENGESİZLİĞİ: Yangın oranı ~%3.26 -- yani "hep hayır de" bile %96+
-accuracy verir ama işe yaramaz. Bu yüzden:
-- class_weight='balanced' (XGBoost için scale_pos_weight) kullanılır
-- Başarı ölçütü accuracy DEĞİL, ROC-AUC ve azınlık sınıfının (yangın=evet)
-  precision/recall'udur
-
-SPLIT: forecaster.py'daki prensiple aynı -- KRONOLOJİK (rastgele değil),
-çünkü bu temelde bir zaman serisi problemi.
+RATE LIMIT VE DAYANIKLILIK: 429 alırsa 65 saniye bekleyip tekrar dener (en
+fazla 3 kez); ağ hatalarında kısa bekleyişle tekrar dener; her il
+tamamlandığında sonucu diske yazar (checkpoint).
 """
-
+import time
+import requests
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-from xgboost import XGBClassifier
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import roc_auc_score, classification_report, precision_recall_fscore_support
-import joblib
+from datetime import datetime, timedelta, timezone
+
+ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+DAILY_VARS = "temperature_2m_max,precipitation_sum,wind_speed_10m_max,wind_direction_10m_dominant"
+SLEEP_SECONDS = 2.0
+RATE_LIMIT_WAIT = 65
+MAX_RETRIES = 3
+DEFAULT_START_DATE = "2023-09-11"  # FIRMS backfill'inin başladığı tarihle aynı
 
 
-# Taban feature seti -- insan kaynaklı/hava durumu gibi ek sinyaller olmadan.
-BASE_FEATURE_COLUMNS = [
-    'grid_lat', 'grid_lon',
-    'month', 'day_of_year', 'is_summer',
-    'lag_1_occurred', 'rolling_7_occurrence_rate', 'rolling_30_occurrence_rate',
-]
-# Sadece evaluate_weather_impact() içindeki ablation testi için (bkz.
-# features.py:WEATHER_FEATURE_COLUMNS -- aynı liste, burada tekrar tanımlı
-# çünkü bu script src/features.py'ı import etmeden bağımsız çalışabiliyor).
-WEATHER_COLUMNS = ['temp_max', 'precip_sum', 'wind_speed_max', 'wind_direction_dominant']
+def compute_province_centroids(daily_summary_path="data/processed/daily_grid_summary.csv",
+                                 grid_location_path="data/processed/grid_location_names.csv"):
+    """Her il için, o ile ait grid hücrelerinin ortalama koordinatını hesaplar."""
+    cells = pd.read_csv(daily_summary_path)[['grid_id', 'grid_lat', 'grid_lon']].drop_duplicates()
+    locations = pd.read_csv(grid_location_path)[['grid_id', 'province']]
+    merged = cells.merge(locations, on='grid_id', how='inner')
 
-# Resmi modelde kullanılan feature seti: taban + hava durumu (ölçülebilir
-# iyileşme sağladığı için dahil). population_density İÇERMİYOR (ölçülen
-# etkisi negatif/ihmal edilebilir çıktı -- bkz. modül docstring'i).
-FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + WEATHER_COLUMNS
+    centroids = merged.groupby('province').agg(
+        lat=('grid_lat', lambda x: (x + 0.125).mean()),
+        lon=('grid_lon', lambda x: (x + 0.125).mean()),
+    ).reset_index()
 
-# Sadece evaluate_population_density_impact() içindeki ablation testi için
-# -- taban sete göre test edilir (hava durumu olmadan), orijinal ölçümle
-# tutarlı kalması için.
-WITH_POPULATION_DENSITY_FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + ['population_density']
-TARGET_COLUMN = 'fire_occurred'
+    print(f"[compute_province_centroids] {len(centroids)} il için centroid hesaplandı")
+    return centroids
 
 
-def prepare_data(panel_path="data/processed/full_panel_daily.csv"):
-    df = pd.read_csv(panel_path)
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.sort_values('date').reset_index(drop=True)
+def fetch_province_weather(province, lat, lon, start_date, end_date):
+    """Tek bir il için, verilen tarih aralığında günlük hava durumu verisi çeker.
+    429 (rate limit) ve bağlantı hatalarında otomatik olarak tekrar dener."""
+    params = {
+        "latitude": round(lat, 4),
+        "longitude": round(lon, 4),
+        "start_date": start_date,
+        "end_date": end_date,
+        "daily": DAILY_VARS,
+        "timezone": "Europe/Istanbul",
+    }
 
-    # XGBoost/Random Forest NaN'ları kendiliğinden işleyebiliyor ama Logistic
-    # Regression işleyemiyor -- hava durumu API'sinin dolduramadığı birkaç
-    # eksik değeri (bkz. features.py:add_weather_features) sütun ortalamasıyla
-    # dolduruyoruz. Çok küçük bir oran (1.4M satırda ~5 bin değer) olduğu için
-    # bu basitleştirme kabul edilebilir.
-    missing_before = df[WEATHER_COLUMNS].isna().sum().sum()
-    if missing_before > 0:
-        df[WEATHER_COLUMNS] = df[WEATHER_COLUMNS].fillna(df[WEATHER_COLUMNS].mean())
-        print(f"[prepare_data] {missing_before} eksik hava durumu değeri sütun ortalamasıyla dolduruldu")
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = requests.get(ARCHIVE_URL, params=params, timeout=45)
+        except requests.exceptions.RequestException as e:
+            print(f"  Bağlantı hatası ({attempt}/{MAX_RETRIES}): {e}")
+            time.sleep(5 * attempt)
+            continue
 
-    print(f"[prepare_data] {len(df)} satır, yangın oranı: {df[TARGET_COLUMN].mean():.2%}")
-    return df
+        if response.status_code == 429:
+            print(f"  Rate limit ({attempt}/{MAX_RETRIES}), {RATE_LIMIT_WAIT} saniye bekleniyor...")
+            time.sleep(RATE_LIMIT_WAIT)
+            continue
 
+        if response.status_code != 200:
+            print(f"  UYARI: {province} için istek başarısız ({response.status_code}): {response.text[:200]}")
+            return None
 
-def chronological_split(df, test_ratio=0.2):
-    """Tarihe göre böler (rastgele değil) -- forecaster.py'daki prensiple aynı,
-    modelin geleceği bilerek eğitilmesini önlemek için."""
-    split_index = int(len(df) * (1 - test_ratio))
-    train = df.iloc[:split_index]
-    test = df.iloc[split_index:]
-    print(f"[chronological_split] Train: {len(train)} (yangın oranı {train[TARGET_COLUMN].mean():.2%}), "
-          f"Test: {len(test)} (yangın oranı {test[TARGET_COLUMN].mean():.2%})")
-    return train, test
+        data = response.json().get("daily", {})
+        if not data or "time" not in data or len(data["time"]) == 0:
+            return None
 
+        return pd.DataFrame({
+            "province": province,
+            "date": data["time"],
+            "temp_max": data.get("temperature_2m_max"),
+            "precip_sum": data.get("precipitation_sum"),
+            "wind_speed_max": data.get("wind_speed_10m_max"),
+            "wind_direction_dominant": data.get("wind_direction_10m_dominant"),
+        })
 
-def evaluate_model(name, y_test, y_pred, y_proba, results):
-    """ROC-AUC ve azınlık sınıfı (yangın=evet) precision/recall'una odaklanır --
-    accuracy bu dengesiz veri setinde yanıltıcı olur."""
-    print("=" * 50)
-    print(name)
-    print("=" * 50)
-    print(classification_report(y_test, y_pred, target_names=['yangın_yok', 'yangın_var']))
-
-    auc = roc_auc_score(y_test, y_proba)
-    precision, recall, f1, _ = precision_recall_fscore_support(
-        y_test, y_pred, average='binary', pos_label=1
-    )
-    print(f"ROC-AUC: {auc:.4f}")
-
-    results.append({
-        'model': name,
-        'roc_auc': auc,
-        'precision_fire': precision,
-        'recall_fire': recall,
-        'f1_fire': f1,
-    })
-    return auc
+    print(f"  BAŞARISIZ: {province} için {MAX_RETRIES} denemeden sonra vazgeçildi.")
+    return None
 
 
-def evaluate_population_density_impact(train, test):
-    """population_density feature'ının gerçekten işe yarayıp yaramadığını
-    ölçer: aynı algoritma (XGBoost), aynı split, tek fark bu feature'ın
-    olup olmaması. Varsayıma değil ölçüme dayalı karar vermek için."""
-    y_train, y_test = train[TARGET_COLUMN], test[TARGET_COLUMN]
-    pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
+def run(end_date=None, output_path="data/external/weather_by_province.csv"):
+    centroids = compute_province_centroids()
 
-    print("\n" + "=" * 50)
-    print("İNSAN KAYNAKLI RİSK FAKTÖRÜ ETKİSİ (population_density)")
-    print("=" * 50)
+    if end_date is None:
+        end_date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    aucs = {}
-    for label, cols in [("population_density OLMADAN", BASE_FEATURE_COLUMNS),
-                         ("population_density İLE", WITH_POPULATION_DENSITY_FEATURE_COLUMNS)]:
-        model = XGBClassifier(
-            n_estimators=100, scale_pos_weight=pos_weight, random_state=42,
-            eval_metric='logloss', n_jobs=-1
-        )
-        model.fit(train[cols], y_train)
-        proba = model.predict_proba(test[cols])[:, 1]
-        auc = roc_auc_score(y_test, proba)
-        aucs[label] = auc
-        print(f"[{label}] ROC-AUC: {auc:.4f}")
+    try:
+        existing = pd.read_csv(output_path)
+        last_dates = existing.groupby('province')['date'].max().to_dict()
+        print(f"[run] Mevcut dosyada {existing['province'].nunique()} il var")
+    except FileNotFoundError:
+        existing = pd.DataFrame()
+        last_dates = {}
+        print("[run] Mevcut dosya yok, sıfırdan başlanıyor")
 
-    diff = aucs["population_density İLE"] - aucs["population_density OLMADAN"]
-    print(f"\nFark: {diff:+.4f} ROC-AUC puanı")
-    if abs(diff) < 0.002:
-        print("Sonuç: Fark ihmal edilebilir düzeyde -- feature gürültüden öteye geçmiyor gibi görünüyor.")
-    elif diff > 0:
-        print("Sonuç: population_density modeli ölçülebilir şekilde iyileştiriyor.")
-    else:
-        print("Sonuç: population_density modeli İYİLEŞTİRMİYOR, hatta hafifçe kötüleştiriyor.")
+    all_new = []
+    for i, row in centroids.iterrows():
+        province = row['province']
+        last_date = last_dates.get(province)
 
+        if last_date is not None:
+            next_start = (datetime.strptime(last_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        else:
+            next_start = DEFAULT_START_DATE
 
-def evaluate_weather_impact(train, test):
-    """Hava durumu feature'larının (sıcaklık, yağış, rüzgar hızı/yönü) gerçekten
-    işe yarayıp yaramadığını ölçer -- aynı mantık, population_density ile
-    yapılan değerlendirmenin aynısı (bkz. evaluate_population_density_impact)."""
-    y_train, y_test = train[TARGET_COLUMN], test[TARGET_COLUMN]
-    pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
+        if next_start > end_date:
+            print(f"[{i + 1}/{len(centroids)}] {province}: zaten güncel, atlanıyor")
+            continue
 
-    print("\n" + "=" * 50)
-    print("SENSÖR FÜZYONU ETKİSİ (hava durumu: sıcaklık, yağış, rüzgar)")
-    print("=" * 50)
+        print(f"[{i + 1}/{len(centroids)}] {province} ({row['lat']:.2f}, {row['lon']:.2f}): "
+              f"{next_start} -> {end_date} isteniyor...")
+        df = fetch_province_weather(province, row['lat'], row['lon'], next_start, end_date)
+        if df is not None and len(df) > 0:
+            all_new.append(df)
+            # Checkpoint: her il tamamlandığında diske yaz
+            combined = pd.concat([existing] + all_new, ignore_index=True) if len(existing) > 0 else pd.concat(all_new, ignore_index=True)
+            combined = combined.drop_duplicates(subset=['province', 'date'], keep='last')
+            combined.to_csv(output_path, index=False)
+        time.sleep(SLEEP_SECONDS)
 
-    aucs = {}
-    for label, cols in [("hava durumu OLMADAN", BASE_FEATURE_COLUMNS),
-                         ("hava durumu İLE", FEATURE_COLUMNS)]:
-        model = XGBClassifier(
-            n_estimators=100, scale_pos_weight=pos_weight, random_state=42,
-            eval_metric='logloss', n_jobs=-1
-        )
-        model.fit(train[cols], y_train)
-        proba = model.predict_proba(test[cols])[:, 1]
-        auc = roc_auc_score(y_test, proba)
-        aucs[label] = auc
-        print(f"[{label}] ROC-AUC: {auc:.4f}")
-
-    diff = aucs["hava durumu İLE"] - aucs["hava durumu OLMADAN"]
-    print(f"\nFark: {diff:+.4f} ROC-AUC puanı")
-    if abs(diff) < 0.002:
-        print("Sonuç: Fark ihmal edilebilir düzeyde -- feature'lar gürültüden öteye geçmiyor gibi görünüyor.")
-    elif diff > 0:
-        print("Sonuç: Hava durumu feature'ları modeli ölçülebilir şekilde iyileştiriyor.")
-    else:
-        print("Sonuç: Hava durumu feature'ları İYİLEŞTİRMİYOR, hatta hafifçe kötüleştiriyor.")
-
-
-def run():
-    df = prepare_data()
-    train, test = chronological_split(df)
-
-    evaluate_population_density_impact(train, test)
-    evaluate_weather_impact(train, test)
-
-    X_train, y_train = train[FEATURE_COLUMNS], train[TARGET_COLUMN]
-    X_test, y_test = test[FEATURE_COLUMNS], test[TARGET_COLUMN]
-
-    results = []
-
-    # 1. Random Forest (ağaç tabanlı, ölçeklendirme yok, class_weight ile dengesizlik ele alınır)
-    rf_model = RandomForestClassifier(
-        n_estimators=100, class_weight='balanced', random_state=42, n_jobs=-1
-    )
-    rf_model.fit(X_train, y_train)
-    rf_proba = rf_model.predict_proba(X_test)[:, 1]
-    evaluate_model("RANDOM FOREST", y_test, rf_model.predict(X_test), rf_proba, results)
-    joblib.dump(rf_model, "outputs/models/occurrence_rf.joblib")
-
-    # 2. XGBoost (ağaç tabanlı, scale_pos_weight ile dengesizlik ele alınır)
-    pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
-    xgb_model = XGBClassifier(
-        n_estimators=100, scale_pos_weight=pos_weight, random_state=42,
-        eval_metric='logloss', n_jobs=-1
-    )
-    xgb_model.fit(X_train, y_train)
-    xgb_proba = xgb_model.predict_proba(X_test)[:, 1]
-    evaluate_model("XGBOOST", y_test, xgb_model.predict(X_test), xgb_proba, results)
-    joblib.dump(xgb_model, "outputs/models/occurrence_xgb.joblib")
-
-    # 3. Logistic Regression (doğrusal, ölçeklendirilmiş veri, class_weight ile dengesizlik)
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    lr_model = LogisticRegression(class_weight='balanced', random_state=42, max_iter=1000)
-    lr_model.fit(X_train_scaled, y_train)
-    lr_proba = lr_model.predict_proba(X_test_scaled)[:, 1]
-    evaluate_model("LOGISTIC REGRESSION", y_test, lr_model.predict(X_test_scaled), lr_proba, results)
-    joblib.dump(lr_model, "outputs/models/occurrence_lr.joblib")
-    joblib.dump(scaler, "outputs/models/occurrence_scaler.joblib")
-
-    # Karşılaştırma tablosu
-    print("\n" + "=" * 50)
-    print("KARŞILAŞTIRMA TABLOSU (ROC-AUC'a göre sıralı)")
-    print("=" * 50)
-    comparison_df = pd.DataFrame(results).sort_values('roc_auc', ascending=False)
-    print(comparison_df.to_string(index=False))
-
-    # Dashboard'un kullandığı ana model: XGBoost.
-    # En yüksek ROC-AUC ve en yüksek recall -- erken uyarı sisteminde
-    # kaçırılan bir yangının maliyeti yanlış alarmdan çok daha yüksek
-    # olduğu için düşük precision kasıtlı bir tercih. Eşik değeri (şu an
-    # varsayılan 0.5) ileride precision/recall dengesini ayarlamak için
-    # değiştirilebilir.
-    joblib.dump(xgb_model, "outputs/models/occurrence.joblib")
-
-    return comparison_df
+    final = pd.concat([existing] + all_new, ignore_index=True) if all_new else existing
+    final = final.drop_duplicates(subset=['province', 'date'], keep='last')
+    final.to_csv(output_path, index=False)
+    print(f"[run] Tamamlandı: {output_path} ({len(final)} satır, {final['province'].nunique()} il)")
+    return final
 
 
 if __name__ == "__main__":
