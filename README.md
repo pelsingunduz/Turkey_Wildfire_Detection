@@ -153,16 +153,40 @@ recall'a sahip. Erken uyarı sisteminde kaçırılan bir yangının maliyeti
 yanlış alarmdan çok daha yüksek olduğu için düşük precision kasıtlı bir
 tercih.
 
-### Sınıflandırma (risk seviyesi) — ~46.000 satır (geçmiş veri sonrası), test seti: 9.164 satır
-| Model | Accuracy | Macro F1 |
-|---|---|---|
-| XGBoost | 0.86 | 0.78 |
-| Random Forest | 0.84 | 0.77 |
-| KNN | 0.80 | 0.71 |
-| SVM | 0.76 | 0.66 |
-| Logistic Regression | 0.76 | 0.64 |
-
-Resmi model XGBoost'a çevrildi. İlginç bir dönüş: küçük veri setinde (~260 satır) Logistic Regression kazanmıştı; veri ~46.000 satıra çıkınca sıralama tamamen tersine döndü — Logistic Regression şimdi sonuncu. Bu, "az veri basit modelleri, çok veri karmaşık modelleri kayırır" prensibinin doğrudan bir doğrulaması.
+### Zaman Serisi (forecaster) — ~46.000 satır, kronolojik split
+ 
+| Model | MAE |
+|---|---|
+| Random Forest Regressor | 0.940 |
+| Linear Regression | 0.947 |
+| XGBoost Regressor | 0.956 |
+ 
+Resmi model **Random Forest Regressor**'a çevrildi. Not: üç modelin MAE
+değerleri birbirine çok yakın (0.94-0.96 arası) — bu fark istatistiksel
+olarak büyük bir anlam taşımayabilir, ama sistematik karşılaştırma
+prensibini korumak için yine de en iyi performans gösteren seçildi.
+ 
+### Anomali Tespiti — z-score vs. Isolation Forest karşılaştırması
+ 
+Bu karşılaştırma, diğerlerinden farklı: **gerçek etiket (ground truth)
+olmadığı için "hangisi daha doğru" diye bir accuracy/MAE ölçülemez.**
+Bunun yerine iki yöntemin kaç anomali işaretlediği ve ne kadar örtüştüğü
+karşılaştırıldı (~42.900 geçerli satır üzerinde):
+ 
+| Yöntem | İşaretlenen anomali |
+|---|---|
+| z-score (mekana özgü, her hücre kendi geçmişiyle) | 1.504 |
+| Isolation Forest (global, tüm hücreler birlikte) | 1.406 |
+| **Örtüşen (ikisi de işaretledi)** | **368 (~%25)** |
+ 
+Düşük örtüşme oranı, iki yöntemin gerçekten FARKLI şeyler ölçtüğünü
+doğruluyor: z-score "bu hücre kendi geçmişine göre sıra dışı mı" sorusuna,
+Isolation Forest ise "bu satır genel örüntüye göre sıra dışı mı" sorusuna
+cevap veriyor. **z-score resmi yöntem olarak kalıyor** çünkü (1)
+yorumlanabilir (bir z-score değeri dashboard'da doğrudan anlamlı), (2)
+mekana özgü bağlam kullanıyor (her bölgeyi kendi normali ile
+karşılaştırıyor) — bu, erken uyarı sistemi için daha isabetli bir çerçeve.
+ 
 
 ## Bilinen Sınırlamalar
 
@@ -271,9 +295,6 @@ streamlit run dashboard/app.py
 
 ## Gelecek Geliştirmeler
 
-- Zaman serisi ve anomali modellerinin büyük veri setiyle (~46.000 satır)
-  yeniden karşılaştırılıp algoritma seçiminin gözden geçirilmesi
-  (sınıflandırma bu karşılaştırmadan zaten geçti -- bkz. Model Karşılaştırmaları)
 - Yangın olasılığı modelinin eşik değerinin (şu an varsayılan 0.5)
   precision/recall dengesi için ayarlanması
 - İnsan kaynaklı risk faktörlerinin (nüfus/atık yoğunluğu gibi) modele
