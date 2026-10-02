@@ -15,6 +15,22 @@ Bunun yerine sadece BUGÜNDEN ÖNCE bilinen şeyler kullanılır:
 - Takvimsel (month, day_of_year, is_summer) -- her zaman bilinir
 - Geçmişe dayalı (lag_1_occurred, rolling_7/30_occurrence_rate) -- shift(1)
   ile hesaplandığı için bugünü hiç görmez (bkz. features.py)
+- İNSAN KAYNAKLI: population_density (ilin km² başına nüfusu, TÜİK) --
+  statik bir feature, her zaman bilinir (bkz. features.py:add_population_density)
+
+İNSAN KAYNAKLI RİSK FAKTÖRÜ DEĞERLENDİRMESİ: population_density eklemeden
+ÖNCE ve SONRA aynı algoritma (XGBoost) ile ayrı ayrı eğitilip ROC-AUC
+karşılaştırılıyor (bkz. evaluate_population_density_impact) -- "bu feature
+gerçekten modeli iyileştiriyor mu" sorusu varsayıma değil ölçüme dayanıyor.
+
+SONUÇ (ölçüldü, varsayılmadı): population_density eklenince ROC-AUC 0.9125
+-> 0.9112'ye düştü (-0.0013, ihmal edilebilir/gürültü düzeyinde). Yani bu
+feature modeli İYİLEŞTİRMEDİ. Bu yüzden RESMİ MODELDE KULLANILMIYOR --
+FEATURE_COLUMNS (resmi eğitimde kullanılan set) population_density
+İÇERMİYOR. Test kodu (evaluate_population_density_impact) ve
+WITH_POPULATION_DENSITY_FEATURE_COLUMNS, bu değerlendirmeyi
+tekrarlanabilir/belgelenebilir kılmak için korunuyor -- "denendi, ölçüldü,
+işe yaramadığı için eklenmedi" kaydı, körü körüne eklemekten daha değerli.
 
 ÖLÇEK NEDENİYLE ALGORİTMA SEÇİMİ: Panel ~1.4 milyon satır içeriyor. SVM ve
 KNN bu ölçekte pratik değil (SVM saatler sürebilir, KNN tahmin anında çok
@@ -40,11 +56,16 @@ from sklearn.metrics import roc_auc_score, classification_report, precision_reca
 import joblib
 
 
+# Resmi modelde kullanılan feature seti (population_density İÇERMİYOR --
+# bkz. modül docstring'indeki "SONUÇ" notu, ölçülen etkisi negatif/ihmal
+# edilebilir çıktı).
 FEATURE_COLUMNS = [
     'grid_lat', 'grid_lon',
     'month', 'day_of_year', 'is_summer',
     'lag_1_occurred', 'rolling_7_occurrence_rate', 'rolling_30_occurrence_rate',
 ]
+# Sadece evaluate_population_density_impact() içindeki ablation testi için.
+WITH_POPULATION_DENSITY_FEATURE_COLUMNS = FEATURE_COLUMNS + ['population_density']
 TARGET_COLUMN = 'fire_occurred'
 
 
@@ -88,11 +109,48 @@ def evaluate_model(name, y_test, y_pred, y_proba, results):
         'recall_fire': recall,
         'f1_fire': f1,
     })
+    return auc
+
+
+def evaluate_population_density_impact(train, test):
+    """population_density feature'ının gerçekten işe yarayıp yaramadığını
+    ölçer: aynı algoritma (XGBoost), aynı split, tek fark bu feature'ın
+    olup olmaması. Varsayıma değil ölçüme dayalı karar vermek için."""
+    y_train, y_test = train[TARGET_COLUMN], test[TARGET_COLUMN]
+    pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
+
+    print("\n" + "=" * 50)
+    print("İNSAN KAYNAKLI RİSK FAKTÖRÜ ETKİSİ (population_density)")
+    print("=" * 50)
+
+    aucs = {}
+    for label, cols in [("population_density OLMADAN", FEATURE_COLUMNS),
+                         ("population_density İLE", WITH_POPULATION_DENSITY_FEATURE_COLUMNS)]:
+        model = XGBClassifier(
+            n_estimators=100, scale_pos_weight=pos_weight, random_state=42,
+            eval_metric='logloss', n_jobs=-1
+        )
+        model.fit(train[cols], y_train)
+        proba = model.predict_proba(test[cols])[:, 1]
+        auc = roc_auc_score(y_test, proba)
+        aucs[label] = auc
+        print(f"[{label}] ROC-AUC: {auc:.4f}")
+
+    diff = aucs["population_density İLE"] - aucs["population_density OLMADAN"]
+    print(f"\nFark: {diff:+.4f} ROC-AUC puanı")
+    if abs(diff) < 0.002:
+        print("Sonuç: Fark ihmal edilebilir düzeyde -- feature gürültüden öteye geçmiyor gibi görünüyor.")
+    elif diff > 0:
+        print("Sonuç: population_density modeli ölçülebilir şekilde iyileştiriyor.")
+    else:
+        print("Sonuç: population_density modeli İYİLEŞTİRMİYOR, hatta hafifçe kötüleştiriyor.")
 
 
 def run():
     df = prepare_data()
     train, test = chronological_split(df)
+
+    evaluate_population_density_impact(train, test)
 
     X_train, y_train = train[FEATURE_COLUMNS], train[TARGET_COLUMN]
     X_test, y_test = test[FEATURE_COLUMNS], test[TARGET_COLUMN]
@@ -138,11 +196,11 @@ def run():
     print(comparison_df.to_string(index=False))
 
     # Dashboard'un kullandığı ana model: XGBoost.
-    # En yüksek ROC-AUC (~0.91) ve en yüksek recall (~%76) -- erken uyarı
-    # sisteminde kaçırılan bir yangının maliyeti yanlış alarmdan çok daha
-    # yüksek olduğu için düşük precision kasıtlı bir tercih. Eşik değeri
-    # (şu an varsayılan 0.5) ileride precision/recall dengesini ayarlamak
-    # için değiştirilebilir.
+    # En yüksek ROC-AUC ve en yüksek recall -- erken uyarı sisteminde
+    # kaçırılan bir yangının maliyeti yanlış alarmdan çok daha yüksek
+    # olduğu için düşük precision kasıtlı bir tercih. Eşik değeri (şu an
+    # varsayılan 0.5) ileride precision/recall dengesini ayarlamak için
+    # değiştirilebilir.
     joblib.dump(xgb_model, "outputs/models/occurrence.joblib")
 
     return comparison_df

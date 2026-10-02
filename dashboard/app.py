@@ -34,6 +34,7 @@ from anomaly import calculate_zscore_features, flag_anomalies # type: ignore
 from forecaster import add_lag_features, predict_clipped, FEATURE_COLUMNS as FORECASTER_FEATURES # type: ignore
 from features import build_latest_occurrence_features # type: ignore
 from classifier import REVERSE_LABEL_MAP # type: ignore
+from occurrence import FEATURE_COLUMNS as OCCURRENCE_FEATURES # type: ignore
 from streamlit_folium import st_folium
 
 @st.cache_resource
@@ -102,7 +103,7 @@ st.markdown(
 st.markdown(f"<style>{load_css()}</style>", unsafe_allow_html=True)
 st.title("🔥 Türkiye Orman Yangını Erken Tespit Sistemi")
 
-with st.expander("**📍 Bu sistem ne yapıyor?**", expanded=True):
+with st.expander("ℹ️ Bu sistem ne yapıyor? (açıklama için tıklayın)", expanded=True):
     st.markdown("""
     Bu sistem, NASA'nın **FIRMS** uydu verisini kullanarak Türkiye genelinde,
     ~27km × 21km'lik hücrelere (grid) bölünmüş bölgeler için orman yangını
@@ -137,20 +138,9 @@ def load_grid_points():
     locations = pd.read_csv("data/processed/grid_location_names.csv")
     grid_points = grid_points.merge(locations, on='grid_id', how='left')
 
-    # geocode_grid.py, GitHub Actions pipeline'ının bir parçası DEĞİL (elle,
-    # tek seferlik çalıştırılıyor) -- yani otomatik pipeline yeni bir bölgede
-    # ilk kez yangın tespit ederse, o grid hücresi bir sonraki elle çalıştırmaya
-    # kadar grid_location_names.csv'de YOK demektir. merge(how='left') bu
-    # durumda gerçek NaN üretir (string 'Bilinmiyor' değil), bu da aşağıdaki
-    # 'Bilinmiyor' karşılaştırmalarını atlatıp haritada "nan - nan" gösterir.
-    # Bu yüzden NaN'ları burada, karşılaştırmalardan ÖNCE, 'Bilinmiyor'a çeviriyoruz.
-    grid_points['province'] = grid_points['province'].fillna('Bilinmiyor')
-    grid_points['district'] = grid_points['district'].fillna('Bilinmiyor')
-
-    # Hem il hem ilçe bilinmiyorsa (sınır/deniz üzerine düşen hücreler,
-    # ya da henüz geocode edilmemiş yeni hücreler), haritada anlamlı bir isim
-    # gösteremeyiz -- bu hücreleri haritadan çıkarıyoruz (model/veri tarafında
-    # hiçbir şey değişmiyor, sadece görünürlük).
+    # Hem il hem ilçe bilinmiyorsa (sınır/deniz üzerine düşen hücreler),
+    # haritada anlamlı bir isim gösteremeyiz -- bu hücreleri haritadan
+    # çıkarıyoruz (model/veri tarafında hiçbir şey değişmiyor, sadece görünürlük).
     unknown_both = (grid_points['province'] == 'Bilinmiyor') & (grid_points['district'] == 'Bilinmiyor')
     grid_points = grid_points[~unknown_both]
 
@@ -196,9 +186,14 @@ def load_daily_summary():
 
 @st.cache_resource
 def load_classifier():
-    """Kayıtlı sınıflandırma modelini yükler (resmi model XGBoost -- ölçeklendirme
-    GEREKTİRMEZ, ham feature'lar doğrudan verilir; bkz. src/models/classifier.py)."""
+    """Kayıtlı sınıflandırma modelini yükler (Logistic Regression, ölçeklendirilmiş veri bekler)."""
     return joblib.load("outputs/models/classifier.joblib")
+
+
+@st.cache_resource
+def load_scaler():
+    """Sınıflandırma modeliyle birlikte eğitilen StandardScaler'ı yükler."""
+    return joblib.load("outputs/models/scaler.joblib")
 
 
 @st.cache_resource
@@ -280,11 +275,7 @@ if map_data.get("last_object_clicked_tooltip"):
             grid_lon=selected_grid_row['grid_lon'],
         )
         occurrence_model = load_occurrence_model()
-        occurrence_columns = [
-            'grid_lat', 'grid_lon', 'month', 'day_of_year', 'is_summer',
-            'lag_1_occurred', 'rolling_7_occurrence_rate', 'rolling_30_occurrence_rate',
-        ]
-        probability = occurrence_model.predict_proba(occ_features[occurrence_columns])[0, 1]
+        probability = occurrence_model.predict_proba(occ_features[OCCURRENCE_FEATURES])[0, 1]
 
         # 2) Risk seviyesi (şiddet) -- sadece geçmiş tespiti varsa
         # NOT: Resmi model XGBoost (bkz. classifier.py) -- ölçeklendirme

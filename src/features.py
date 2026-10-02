@@ -80,6 +80,33 @@ def build_daily_summary(df):
 # sadece geçmişe dayalı (lag/rolling) ve takvimsel feature'lar kullanılır.
 # ---------------------------------------------------------------------------
 
+TURKEY_AVERAGE_POPULATION_DENSITY = 112  # TÜİK 2025 ADNKS, km² başına kişi -- sınır ötesi/bilinmeyen il için varsayılan
+
+
+def add_population_density(panel, grid_location_path="data/processed/grid_location_names.csv",
+                            density_path="data/external/il_population_density.csv"):
+    """Her grid hücresine, bulunduğu ilin nüfus yoğunluğunu (km² başına kişi) ekler.
+    İNSAN KAYNAKLI RİSK FAKTÖRÜ: nüfus yoğunluğu yüksek bölgelerde hem yangın
+    çıkma ihtimali (insan kaynaklı tutuşma -- mangal, sigara, kundaklama vb.)
+    hem de müdahale hızı farklılaşabilir. Statik bir feature'dır (günden güne
+    değişmez), bu yüzden hem eğitim panelinde hem serving'de aynı şekilde
+    eklenir.
+    Sınır ötesi ya da eşleşmeyen iller için (örn. Suriye, Yunanistan taraflı
+    hücreler) Türkiye geneli ortalaması kullanılır -- bu hücreler zaten
+    azınlıkta ve kesin bir değer bilinmiyor."""
+    locations = pd.read_csv(grid_location_path)[['grid_id', 'province']]
+    density = pd.read_csv(density_path)
+
+    panel = panel.merge(locations, on='grid_id', how='left')
+    panel = panel.merge(density, on='province', how='left')
+    panel['population_density'] = panel['population_density'].fillna(TURKEY_AVERAGE_POPULATION_DENSITY)
+    panel = panel.drop(columns=['province'])
+
+    print(f"[add_population_density] tamamlandı, "
+          f"{panel['population_density'].eq(TURKEY_AVERAGE_POPULATION_DENSITY).sum()} hücre varsayılan ortalamayı kullanıyor")
+    return panel
+
+
 def build_full_panel(with_grid_df, daily_summary_df):
     """Her grid hücresi x her takvim günü kombinasyonunu içeren tam panel oluşturur.
     Yangın olmayan gün/hücre çiftlerinde fire_count=0 olur.
@@ -193,6 +220,8 @@ def build_latest_occurrence_features(daily_summary_df, grid_id, grid_lat, grid_l
         'rolling_7_occurrence_rate': rolling_7,
         'rolling_30_occurrence_rate': rolling_30,
     }])
+    features = add_population_density(features.assign(grid_id=grid_id))
+    features = features.drop(columns=['grid_id'])
     return features, target_date
 
 
@@ -209,6 +238,7 @@ def run_occurrence_panel_pipeline():
 
     # daily_summary'nin 'date' sütunu datetime.date, panel de aynı tipte olmalı
     panel = build_full_panel(with_grid, daily_summary)
+    panel = add_population_density(panel)
     panel = add_calendar_features(panel)
     panel = add_occurrence_lag_features(panel)
 
