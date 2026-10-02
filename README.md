@@ -153,6 +153,24 @@ recall'a sahip. Erken uyarı sisteminde kaçırılan bir yangının maliyeti
 yanlış alarmdan çok daha yüksek olduğu için düşük precision kasıtlı bir
 tercih.
 
+### İnsan Kaynaklı Risk Faktörü — Nüfus Yoğunluğu Değerlendirmesi
+
+Yangın olasılığı modeline, ilin km² başına nüfusunu (TÜİK, 2021 tahmini)
+feature olarak eklemenin modeli iyileştirip iyileştirmediği ölçüldü: aynı
+algoritma (XGBoost), aynı split, tek fark bu feature'ın olup olmaması.
+
+| Durum | ROC-AUC |
+|---|---|
+| population_density OLMADAN | 0.9125 |
+| population_density İLE | 0.9112 |
+
+**Sonuç: fark negatif/ihmal edilebilir düzeyde (-0.0013).** Nüfus yoğunluğu
+modeli ölçülebilir şekilde iyileştirmedi, bu yüzden **resmi modelde
+kullanılmıyor**. Test kodu (`evaluate_population_density_impact` fonksiyonu,
+`src/models/occurrence.py`) kalıcı olarak korunuyor — bu, "denendi, ölçüldü,
+işe yaramadığı için eklenmedi" kararının varsayıma değil veriye dayandığını
+gösteriyor.
+
 ### Zaman Serisi (forecaster) — ~46.000 satır, kronolojik split
  
 | Model | MAE |
@@ -178,6 +196,7 @@ karşılaştırıldı (~42.900 geçerli satır üzerinde):
 | z-score (mekana özgü, her hücre kendi geçmişiyle) | 1.504 |
 | Isolation Forest (global, tüm hücreler birlikte) | 1.406 |
 | **Örtüşen (ikisi de işaretledi)** | **368 (~%25)** |
+
  
 Düşük örtüşme oranı, iki yöntemin gerçekten FARKLI şeyler ölçtüğünü
 doğruluyor: z-score "bu hücre kendi geçmişine göre sıra dışı mı" sorusuna,
@@ -297,11 +316,7 @@ streamlit run dashboard/app.py
 
 - Yangın olasılığı modelinin eşik değerinin (şu an varsayılan 0.5)
   precision/recall dengesi için ayarlanması
-- İnsan kaynaklı risk faktörlerinin (nüfus/atık yoğunluğu gibi) modele
-  eklenmesi
 - Çoklu sensör desteği (MODIS ile karşılaştırmalı analiz)
-- Zaman serisi ve anomali tespiti için de çoklu algoritma karşılaştırması
-  (Random Forest Regressor, Isolation Forest gibi)
 
 <img width="1145" height="603" alt="Ekran Resmi 2026-09-12 15 23 41" src="https://github.com/user-attachments/assets/7af7bda4-44df-4723-94ba-472e7ad9063d" />
 <img width="1139" height="601" alt="Ekran Resmi 2026-09-12 15 24 19" src="https://github.com/user-attachments/assets/1cba0552-e300-4b42-913a-456dec82be83" />
