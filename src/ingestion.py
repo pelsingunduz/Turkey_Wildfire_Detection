@@ -13,7 +13,15 @@ DAY_RANGE = 1
 
 def fetch_firms_data():
     url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/{SENSOR}/{BBOX}/{DAY_RANGE}"
-    response = requests.get(url)
+    # timeout: FIRMS API bazen yanıt vermeyebilir -- timeout olmadan GitHub
+    # Actions job'ı süresiz asılı kalabilirdi (bkz. historical_backfill.py'deki
+    # aynı pattern). try/except, geçici ağ hatalarında (DNS, bağlantı kopması)
+    # programın çökmek yerine anlamlı bir mesajla None dönmesini sağlar.
+    try:
+        response = requests.get(url, timeout=30)
+    except requests.exceptions.RequestException as e:
+        print(f"Ağ hatası: {e}")
+        return None
 
     if response.status_code != 200:
         print(f"Hata: {response.status_code}")

@@ -6,27 +6,33 @@ Feature'lar:
 - lag_1_fire_count: bir önceki günün fire_count değeri
 - rolling_3_avg: son 3 günün (mevcut değilse eldeki kadarının) ortalaması
 
-ÖNEMLİ SINIRLAMA: Şu anki veri hacmiyle (3 günlük ham veri, ~14 kullanılabilir
-satır), bu model istatistiksel olarak anlamlı bir performans göstermiyor.
-MAE gibi metrikler bu aşamada güvenilir değildir — sadece pipeline'ın
-(lag üretimi -> kronolojik split -> eğitim -> tahmin) uçtan uca çalıştığını
-doğrulamak amacıyla kuruldu. Veri arttıkça (birkaç hafta sonra) yeniden
-değerlendirilmelidir.
+GÜNCELLEME (geçmiş veri backfill'i sonrası, ~46.000 satır): Artık yeterli
+veri olduğu için ÜÇ algoritma karşılaştırılıyor (Linear Regression, Random
+Forest Regressor, XGBoost Regressor) -- projenin diğer modellerindeki
+(classifier.py, occurrence.py) "algoritma seçimi veriye dayalı, sistematik
+bir süreç olmalı" prensibiyle tutarlı olması için. İlk sürümde (3 günlük
+ham veri, ~14 satır) tek algoritma (Linear Regression) kullanılmıştı --
+o kadar az veriyle karşılaştırma yapmanın bir anlamı yoktu.
 
 Split KRONOLOJİK yapılır (rastgele değil) — modelin geleceği bilerek
 eğitilmesini (data leakage) önlemek için.
 
-NEGATİF TAHMİN UYARISI: LinearRegression, çıktısını 0'da sınırlamaz --
+NEGATİF TAHMİN UYARISI: Linear Regression, çıktısını 0'da sınırlamaz --
 matematiksel olarak negatif bir "sıcak nokta sayısı" tahmini üretebilir,
-ki bu anlamsızdır (sayım asla negatif olamaz). Bu modülün ürettiği HER
-tahmin, kullanılmadan önce np.clip(tahmin, 0, None) ile sıfırın altına
-düşürülmemelidir -- bkz. train_and_evaluate() ve dashboard/app.py'daki
-kullanım. Modelin kendisi (joblib'e kaydedilen haliyle) bunu otomatik
-yapmaz, her çağıran kod bunu kendisi uygulamalı.
+ki bu anlamsızdır (sayım asla negatif olamaz). Ağaç tabanlı modeller
+(Random Forest, XGBoost) bu sorunu yapısal olarak yaşamaz (yaprak
+değerleri eğitim verisindeki gerçek değerlerden türediği için hep
+pozitif), ama güvenlik için HER modelin tahmini np.clip(tahmin, 0, None)
+ile sıfırın altına düşürülür -- bkz. predict_clipped() ve
+dashboard/app.py'daki kullanım. Modelin kendisi (joblib'e kaydedilen
+haliyle) bunu otomatik yapmaz, her çağıran kod predict_clipped()
+kullanmalı.
 """
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
 from sklearn.metrics import mean_absolute_error
 import joblib
 
@@ -69,26 +75,19 @@ def chronological_split(ts_data, test_ratio=0.2):
     return train, test
 
 
-def train_and_evaluate(train, test):
-    """Linear Regression eğitir, MAE ile değerlendirir.
-    NOT: Küçük veri setinde MAE metriği güvenilir değildir (bkz. modül docstring'i).
-    Tahminler, negatif sıcak nokta sayısı anlamsız olduğu için 0'da kırpılır."""
-    X_train, y_train = train[FEATURE_COLUMNS], train['fire_count']
-    X_test, y_test = test[FEATURE_COLUMNS], test['fire_count']
-    model = LinearRegression()
-    model.fit(X_train, y_train)
-    y_pred = np.clip(model.predict(X_test), 0, None)
-    mae = mean_absolute_error(y_test, y_pred)
-    print(f"[train_and_evaluate] MAE: {mae:.2f} (küçük veri setiyle güvenilir değil)")
-    return model
-
-
 def predict_clipped(model, X):
     """Modelin tahminini alır ve negatif değerleri 0'a sabitler.
     Dashboard dahil, bu modeli kullanan HER yer bu fonksiyonu (ya da aynı
-    np.clip mantığını) kullanmalı -- ham model.predict() negatif değer
-    üretebilir."""
+    np.clip mantığını) kullanmalı -- ham model.predict() (özellikle Linear
+    Regression için) negatif değer üretebilir."""
     return np.clip(model.predict(X), 0, None)
+
+
+def evaluate_model(name, y_test, y_pred, results):
+    """MAE hesaplar, ekrana basar, karşılaştırma tablosu için kaydeder."""
+    mae = mean_absolute_error(y_test, y_pred)
+    print(f"[{name}] MAE: {mae:.3f}")
+    results.append({'model': name, 'mae': mae})
 
 
 def save_model(model, path="outputs/models/forecaster.joblib"):
@@ -99,9 +98,44 @@ def save_model(model, path="outputs/models/forecaster.joblib"):
 def run():
     ts_data = prepare_data()
     train, test = chronological_split(ts_data)
-    model = train_and_evaluate(train, test)
-    save_model(model)
-    return model
+
+    X_train, y_train = train[FEATURE_COLUMNS], train['fire_count']
+    X_test, y_test = test[FEATURE_COLUMNS], test['fire_count']
+
+    results = []
+
+    # 1. Linear Regression (doğrusal, negatif tahmin üretebilir -- clip gerekli)
+    lr_model = LinearRegression()
+    lr_model.fit(X_train, y_train)
+    evaluate_model("LINEAR REGRESSION", y_test, predict_clipped(lr_model, X_test), results)
+    joblib.dump(lr_model, "outputs/models/forecaster_lr.joblib")
+
+    # 2. Random Forest Regressor (ağaç tabanlı, doğrusal olmayan ilişkileri yakalayabilir)
+    rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+    rf_model.fit(X_train, y_train)
+    evaluate_model("RANDOM FOREST", y_test, predict_clipped(rf_model, X_test), results)
+    joblib.dump(rf_model, "outputs/models/forecaster_rf.joblib")
+
+    # 3. XGBoost Regressor (ağaç tabanlı, boosting)
+    xgb_model = XGBRegressor(n_estimators=100, random_state=42)
+    xgb_model.fit(X_train, y_train)
+    evaluate_model("XGBOOST", y_test, predict_clipped(xgb_model, X_test), results)
+    joblib.dump(xgb_model, "outputs/models/forecaster_xgb.joblib")
+
+    # Karşılaştırma tablosu
+    print("\n" + "=" * 50)
+    print("KARŞILAŞTIRMA TABLOSU (MAE'ye göre sıralı, düşük daha iyi)")
+    print("=" * 50)
+    comparison_df = pd.DataFrame(results).sort_values('mae')
+    print(comparison_df.to_string(index=False))
+
+    # Resmi model: en düşük MAE'ye sahip olan.
+    best_name = comparison_df.iloc[0]['model']
+    best_model = {"LINEAR REGRESSION": lr_model, "RANDOM FOREST": rf_model, "XGBOOST": xgb_model}[best_name]
+    print(f"\n[run] Resmi model: {best_name}")
+    save_model(best_model)
+
+    return comparison_df
 
 
 if __name__ == "__main__":

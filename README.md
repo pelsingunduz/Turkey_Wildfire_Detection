@@ -271,9 +271,9 @@ streamlit run dashboard/app.py
 
 ## Gelecek Geliştirmeler
 
-- Sınıflandırma, zaman serisi ve anomali modellerinin büyük veri setiyle
-  (~46.000 satır) yeniden karşılaştırılıp algoritma seçiminin gözden
-  geçirilmesi
+- Zaman serisi ve anomali modellerinin büyük veri setiyle (~46.000 satır)
+  yeniden karşılaştırılıp algoritma seçiminin gözden geçirilmesi
+  (sınıflandırma bu karşılaştırmadan zaten geçti -- bkz. Model Karşılaştırmaları)
 - Yangın olasılığı modelinin eşik değerinin (şu an varsayılan 0.5)
   precision/recall dengesi için ayarlanması
 - İnsan kaynaklı risk faktörlerinin (nüfus/atık yoğunluğu gibi) modele
