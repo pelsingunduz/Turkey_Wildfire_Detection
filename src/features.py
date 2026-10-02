@@ -1,5 +1,6 @@
 import pandas as pd
 import geopandas as gpd
+import requests
 from shapely.geometry import Point
 import glob
 
@@ -107,6 +108,46 @@ def add_population_density(panel, grid_location_path="data/processed/grid_locati
     return panel
 
 
+WEATHER_FEATURE_COLUMNS = ['temp_max', 'precip_sum', 'wind_speed_max', 'wind_direction_dominant']
+
+
+def add_weather_features(panel, grid_location_path="data/processed/grid_location_names.csv",
+                          weather_path="data/external/weather_by_province.csv"):
+    """Her grid hücresine, bulunduğu ilin o günkü hava durumunu (sıcaklık, yağış,
+    rüzgar hızı, rüzgar yönü) ekler. SENSÖR FÜZYONU: uydu verisine (FIRMS) ek
+    olarak meteorolojik veri katmanı -- sıcak+kuru+rüzgarlı koşullar klasik
+    yüksek yangın riski göstergeleridir.
+    Nüfus yoğunluğundan farklı olarak fallback'e nadiren ihtiyaç duyulur (hava
+    durumu her koordinat için mevcuttur); yine de eksik kalan kombinasyonlar
+    (örn. API hatası nedeniyle) o tarihin iller arası ortalamasıyla doldurulur."""
+    locations = pd.read_csv(grid_location_path)[['grid_id', 'province']]
+    weather = pd.read_csv(weather_path)
+    weather['date'] = pd.to_datetime(weather['date']).dt.strftime('%Y-%m-%d')
+
+    panel = panel.copy()
+    panel['_date_str'] = pd.to_datetime(panel['date']).dt.strftime('%Y-%m-%d')
+    panel = panel.merge(locations, on='grid_id', how='left')
+    panel = panel.merge(
+        weather, left_on=['province', '_date_str'], right_on=['province', 'date'],
+        how='left', suffixes=('', '_weather')
+    )
+
+    daily_avg = weather.groupby('date')[WEATHER_FEATURE_COLUMNS].mean()
+    for col in WEATHER_FEATURE_COLUMNS:
+        missing = panel[col].isna()
+        if missing.any():
+            panel.loc[missing, col] = panel.loc[missing, '_date_str'].map(daily_avg[col])
+
+    drop_cols = ['province', '_date_str']
+    if 'date_weather' in panel.columns:
+        drop_cols.append('date_weather')
+    panel = panel.drop(columns=drop_cols)
+
+    missing_total = panel[WEATHER_FEATURE_COLUMNS].isna().sum().sum()
+    print(f"[add_weather_features] tamamlandı, {missing_total} eksik değer kaldı (ortalamayla doldurulamayan)")
+    return panel
+
+
 def build_full_panel(with_grid_df, daily_summary_df):
     """Her grid hücresi x her takvim günü kombinasyonunu içeren tam panel oluşturur.
     Yangın olmayan gün/hücre çiftlerinde fire_count=0 olur.
@@ -175,6 +216,43 @@ def add_occurrence_lag_features(panel):
     return panel
 
 
+def fetch_forecast_weather(lat, lon, target_date):
+    """SERVING zamanı için YARININ hava durumu tahminini Open-Meteo'nun CANLI
+    tahmin API'sinden çeker (archive API geçmişi kapsar, yarın için işe
+    yaramaz -- bu yüzden farklı bir endpoint: api.open-meteo.com/v1/forecast).
+
+    Başarısız olursa None döner -- XGBoost eksik (NaN) değerleri doğal olarak
+    işleyebildiği için bu durumda tahmin yine de yapılabilir, sadece hava
+    durumu sinyali olmadan (bkz. dashboard/app.py'daki kullanım)."""
+    try:
+        response = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": round(lat, 4),
+                "longitude": round(lon, 4),
+                "daily": "temperature_2m_max,precipitation_sum,wind_speed_10m_max,wind_direction_10m_dominant",
+                "timezone": "Europe/Istanbul",
+                "forecast_days": 3,
+            },
+            timeout=10,
+        )
+        if response.status_code != 200:
+            return None
+        data = response.json().get("daily", {})
+        target_str = target_date.strftime('%Y-%m-%d')
+        if target_str not in data.get("time", []):
+            return None
+        idx = data["time"].index(target_str)
+        return {
+            'temp_max': data["temperature_2m_max"][idx],
+            'precip_sum': data["precipitation_sum"][idx],
+            'wind_speed_max': data["wind_speed_10m_max"][idx],
+            'wind_direction_dominant': data["wind_direction_10m_dominant"][idx],
+        }
+    except requests.exceptions.RequestException:
+        return None
+
+
 def build_latest_occurrence_features(daily_summary_df, grid_id, grid_lat, grid_lon,
                                       as_of_date=None, window_days=30):
     """SERVING (dashboard) zamanı için: tek bir grid hücresi için YARININ yangın
@@ -222,6 +300,11 @@ def build_latest_occurrence_features(daily_summary_df, grid_id, grid_lat, grid_l
     }])
     features = add_population_density(features.assign(grid_id=grid_id))
     features = features.drop(columns=['grid_id'])
+
+    weather = fetch_forecast_weather(grid_lat, grid_lon, target_date)
+    for col in WEATHER_FEATURE_COLUMNS:
+        features[col] = weather[col] if weather else None
+
     return features, target_date
 
 
@@ -239,6 +322,7 @@ def run_occurrence_panel_pipeline():
     # daily_summary'nin 'date' sütunu datetime.date, panel de aynı tipte olmalı
     panel = build_full_panel(with_grid, daily_summary)
     panel = add_population_density(panel)
+    panel = add_weather_features(panel)
     panel = add_calendar_features(panel)
     panel = add_occurrence_lag_features(panel)
 
