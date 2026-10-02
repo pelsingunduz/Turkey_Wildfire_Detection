@@ -38,3 +38,6 @@ jobs:
           git add data/ outputs/
           git diff --staged --quiet || git commit -m "Otomatik veri ve model güncellemesi: $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push
+      - name: Streamlit dashboard'u uyanık tut
+        run: |
+          curl -sSL --max-time 30 https://turkiyeormanyanginitespiti.streamlit.app/ -o /dev/null || true
