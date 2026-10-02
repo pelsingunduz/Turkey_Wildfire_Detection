@@ -19,6 +19,7 @@ sistem inşa etmek — statik bir Kaggle veri setinden değil, canlı bir API'de
 ## Mimari
 ```
 NASA FIRMS API (VIIRS_SNPP_NRT canlı + VIIRS_SNPP_SP geçmiş, Türkiye bounding box)
++ Open-Meteo API (hava durumu: sıcaklık, yağış, rüzgar — il bazında)
 ↓
 INGESTION — her 4 saatte bir otomatik veri çekme (GitHub Actions) + 3 yıllık geçmiş veri backfill
 ↓
@@ -28,7 +29,8 @@ FEATURE ENGINEERING
 ├── Zaman dilimi düzeltmesi (UTC → Türkiye saati)
 ├── 0.25° grid ataması
 ├── Günlük, bölge bazlı özet tablo (tespit edilen günler)
-└── Tam panel: grid × takvim günü (yangınsız günler dahil, olasılık modeli için)
+├── Tam panel: grid × takvim günü (yangınsız günler dahil, olasılık modeli için)
+└── Sensör füzyonu: il bazlı hava durumu verisinin panele eklenmesi
 ↓
 ┌───────────────┬─────────────────┬────────────────────┬──────────────────────┐
 YANGIN OLASILIĞI SINIFLANDIRMA ZAMAN SERİSİ ANOMALİ TESPİTİ
@@ -48,8 +50,9 @@ açık/kapalı olma durumundan tamamen bağımsız, sürekli veri biriktirmesini
 sağlar:
 
 1. FIRMS API'den yeni veri çekilir
-2. Veri temizlenir, işlenir, günlük özet tablo ve olasılık paneli güncellenir
-3. Güncellenen veri otomatik olarak repoya commit'lenir
+2. Hava durumu verisi artımlı olarak güncellenir (sadece eksik günler çekilir)
+3. Veri temizlenir, işlenir, günlük özet tablo ve olasılık paneli güncellenir
+4. Güncellenen veri otomatik olarak repoya commit'lenir
 
 FIRMS API key'i, GitHub Secrets üzerinden güvenli şekilde workflow'a
 aktarılır — kod içinde hiçbir yerde açık şekilde bulunmaz.
@@ -60,6 +63,10 @@ model** (yangın olasılığı, sınıflandırma, zaman serisi, anomali tespiti)
 güncellenen model dosyaları (`outputs/models/*.joblib`) da veriyle birlikte
 repoya commit'lenir. Bu sayede dashboard'u ne zaman açsan, en güncel veriyle
 eğitilmiş modelleri kullanmış olursun (yalnızca `git pull` yeterlidir).
+
+Workflow'un son adımı, Streamlit Community Cloud'daki canlı dashboard'u
+ziyaret ederek onu uyanık tutar (ücretsiz katman, 12 saat trafiksiz kalan
+uygulamaları uyku moduna alıyor; 4 saatlik ziyaretler bu eşiğin altında kalır).
 
 ## Tasarım Kararları ve Gerekçeleri
 
@@ -117,8 +124,8 @@ Bu proje, her adımda bilinçli mühendislik kararları içeriyor:
   feature'ları arasında `avg_brightness`/`avg_frp`/`max_frp` YOK, çünkü
   bunlar ancak bir yangın zaten tespit edildiğinde ölçülebilir; bir
   "olacak mı" tahmininde kullanmak dolambaçlı bir tautoloji olurdu.
-  Bunun yerine sadece coğrafi konum, takvimsel (ay, yılın günü) ve
-  geçmişe dayalı (lag/rolling occurrence rate) feature'lar kullanılıyor.
+  Bunun yerine sadece coğrafi konum, takvimsel (ay, yılın günü), geçmişe
+  dayalı (lag/rolling occurrence rate) ve hava durumu feature'ları kullanılıyor.
 - **Aşırı sınıf dengesizliği (yangın oranı ~%3.3):** `class_weight='balanced'`
   (Random Forest, Logistic Regression) ve `scale_pos_weight` (XGBoost) ile
   ele alındı; başarı ölçütü olarak accuracy yerine **ROC-AUC** ve azınlık
@@ -137,6 +144,16 @@ Bu proje, her adımda bilinçli mühendislik kararları içeriyor:
   otomatik düşülüyor — kullanıcı hiçbir zaman boş/bozuk bir ekran görmüyor.
   Aynı bölge + aynı gün için tekrar tıklamalarda API'ye tekrar gidilmemesi
   için sonuçlar cache'leniyor.
+- **Sensör füzyonu (hava durumu), il bazında basitleştirildi:** 1286 grid
+  hücresinin her biri için ayrı hava durumu sorgusu atmak yerine, nüfus
+  yoğunluğunda kullanılan aynı prensiple, her ilin grid hücrelerinin
+  ortalama koordinatı "o ilin temsilcisi" olarak kullanıldı (~98 istek,
+  binlerce yerine). Open-Meteo'nun hem geçmiş (archive) hem canlı (forecast)
+  API'leri kullanılıyor — eğitim verisi geçmiş archive'dan, dashboard'daki
+  "yarın" tahmini ise canlı forecast API'sinden geliyor. Hava durumu
+  backfill'i artımlı çalışır: her çalıştırıldığında sadece eksik günleri
+  çeker, GitHub Actions'ta her 4 saatte bir tekrar tüm geçmişi çekmeye
+  gerek kalmaz.
 
 ## Model Karşılaştırmaları
 
@@ -144,9 +161,9 @@ Bu proje, her adımda bilinçli mühendislik kararları içeriyor:
 
 | Model | ROC-AUC | Precision (yangın) | Recall (yangın) | F1 (yangın) |
 |---|---|---|---|---|
-| XGBoost | 0.91 | 0.20 | 0.76 | 0.32 |
-| Logistic Regression | 0.90 | 0.28 | 0.68 | 0.40 |
-| Random Forest | 0.86 | 0.33 | 0.27 | 0.30 |
+| XGBoost | 0.92 | 0.20 | 0.77 | 0.32 |
+| Logistic Regression | 0.90 | 0.23 | 0.71 | 0.35 |
+| Random Forest | 0.88 | 0.71 | 0.24 | 0.36 |
 
 Resmi model olarak **XGBoost** seçildi — en yüksek ROC-AUC ve en yüksek
 recall'a sahip. Erken uyarı sisteminde kaçırılan bir yangının maliyeti
@@ -161,43 +178,59 @@ algoritma (XGBoost), aynı split, tek fark bu feature'ın olup olmaması.
 
 | Durum | ROC-AUC |
 |---|---|
-| population_density OLMADAN | 0.9125 |
-| population_density İLE | 0.9112 |
+| population_density OLMADAN | 0.9135 |
+| population_density İLE | 0.9129 |
 
-**Sonuç: fark negatif/ihmal edilebilir düzeyde (-0.0013).** Nüfus yoğunluğu
+**Sonuç: fark negatif/ihmal edilebilir düzeyde (-0.0007).** Nüfus yoğunluğu
 modeli ölçülebilir şekilde iyileştirmedi, bu yüzden **resmi modelde
 kullanılmıyor**. Test kodu (`evaluate_population_density_impact` fonksiyonu,
 `src/models/occurrence.py`) kalıcı olarak korunuyor — bu, "denendi, ölçüldü,
 işe yaramadığı için eklenmedi" kararının varsayıma değil veriye dayandığını
 gösteriyor.
 
+### Sensör Füzyonu — Hava Durumu Değerlendirmesi
+
+Aynı yöntemle, Open-Meteo'dan alınan günlük hava durumu verisinin (sıcaklık,
+yağış, rüzgar hızı, rüzgar yönü — il bazında) etkisi de ölçüldü:
+
+| Durum | ROC-AUC |
+|---|---|
+| hava durumu OLMADAN | 0.9135 |
+| hava durumu İLE | 0.9183 |
+
+**Sonuç: +0.0048 ROC-AUC — ölçülebilir bir iyileşme.** Nüfus yoğunluğunun
+aksine, hava durumu modeli gerçekten iyileştirdi, bu yüzden **resmi modelde
+kullanılıyor**. "Sıcak + kuru + rüzgarlı = yüksek risk" ilişkisinin modelin
+öğrendiği örüntülerle örtüştüğünü gösteriyor. Veri il merkezinden alındığı
+için (grid hücresi bazında değil) bir yaklaşıklık içeriyor — bkz. Bilinen
+Sınırlamalar.
+
 ### Zaman Serisi (forecaster) — ~46.000 satır, kronolojik split
- 
+
 | Model | MAE |
 |---|---|
 | Random Forest Regressor | 0.940 |
 | Linear Regression | 0.947 |
 | XGBoost Regressor | 0.956 |
- 
+
 Resmi model **Random Forest Regressor**'a çevrildi. Not: üç modelin MAE
 değerleri birbirine çok yakın (0.94-0.96 arası) — bu fark istatistiksel
 olarak büyük bir anlam taşımayabilir, ama sistematik karşılaştırma
 prensibini korumak için yine de en iyi performans gösteren seçildi.
- 
+
 ### Anomali Tespiti — z-score vs. Isolation Forest karşılaştırması
- 
+
 Bu karşılaştırma, diğerlerinden farklı: **gerçek etiket (ground truth)
 olmadığı için "hangisi daha doğru" diye bir accuracy/MAE ölçülemez.**
 Bunun yerine iki yöntemin kaç anomali işaretlediği ve ne kadar örtüştüğü
 karşılaştırıldı (~42.900 geçerli satır üzerinde):
- 
+
 | Yöntem | İşaretlenen anomali |
 |---|---|
 | z-score (mekana özgü, her hücre kendi geçmişiyle) | 1.504 |
 | Isolation Forest (global, tüm hücreler birlikte) | 1.406 |
 | **Örtüşen (ikisi de işaretledi)** | **368 (~%25)** |
 
- 
 Düşük örtüşme oranı, iki yöntemin gerçekten FARKLI şeyler ölçtüğünü
 doğruluyor: z-score "bu hücre kendi geçmişine göre sıra dışı mı" sorusuna,
 Isolation Forest ise "bu satır genel örüntüye göre sıra dışı mı" sorusuna
@@ -205,7 +238,6 @@ cevap veriyor. **z-score resmi yöntem olarak kalıyor** çünkü (1)
 yorumlanabilir (bir z-score değeri dashboard'da doğrudan anlamlı), (2)
 mekana özgü bağlam kullanıyor (her bölgeyi kendi normali ile
 karşılaştırıyor) — bu, erken uyarı sistemi için daha isabetli bir çerçeve.
- 
 
 ## Bilinen Sınırlamalar
 
@@ -219,10 +251,14 @@ karşılaştırıyor) — bu, erken uyarı sistemi için daha isabetli bir çer�
   bir tercih (yüksek recall'u önceliklendirme) ama pratikte "gerçek"
   alarmların çoğu yanlış alarm anlamına geliyor — dashboard kullanıcısı
   bunu bilerek yorumlamalı.
+- **Hava durumu verisi il bazındadır, grid hücresi bazında değil.** 0.25°'lik
+  bir hücre içindeki gerçek hava durumu, o ilin merkezinden biraz farklı
+  olabilir — bu da grid-il eşleştirmesiyle aynı yaklaşıklık mantığı.
 
 ## Teknoloji Yığını
 
-- **Veri:** NASA FIRMS API (VIIRS_SNPP_NRT canlı, VIIRS_SNPP_SP geçmiş)
+- **Veri:** NASA FIRMS API (VIIRS_SNPP_NRT canlı, VIIRS_SNPP_SP geçmiş),
+  Open-Meteo API (hava durumu — archive + forecast)
 - **İşleme:** pandas, geopandas, shapely, numpy
 - **Modelleme:** scikit-learn (RandomForestClassifier, LogisticRegression,
   LinearRegression, SVC, KNeighborsClassifier), XGBoost
@@ -236,10 +272,12 @@ karşılaştırıyor) — bu, erken uyarı sistemi için daha isabetli bir çer�
 turkey-wildfire-detection/
 ├── data/
 │ ├── raw/ # FIRMS'ten çekilen ham CSV'ler (canlı + geçmiş, zaman damgalı)
-│ └── processed/ # Günlük özet, tam panel, grid-il/ilçe eşleşmesi
+│ ├── processed/ # Günlük özet, tam panel, grid-il/ilçe eşleşmesi
+│ └── external/ # Nüfus yoğunluğu, il bazlı hava durumu verisi
 ├── src/
 │ ├── ingestion.py # FIRMS API'den canlı veri çekme
 │ ├── historical_backfill.py # 3 yıllık geçmiş veri (SP+NRT hibrit)
+│ ├── weather_backfill.py # İl bazlı hava durumu (artımlı günceller)
 │ ├── geocode_grid.py # Grid hücreleri için il/ilçe isimleri
 │ ├── features.py # Temizlik, sınır filtresi, grid, günlük özet, tam panel
 │ └── models/
@@ -276,12 +314,13 @@ OPENAI_API_KEY=your_openai_key_here
 FIRMS key için [ücretsiz kayıt](https://firms.modaps.eosdis.nasa.gov/api/map_key/),
 OpenAI key için [platform.openai.com](https://platform.openai.com/api-keys)
 (LLM açıklama katmanı opsiyoneldir — key yoksa dashboard otomatik olarak
-şablon özete düşer).
+şablon özete düşer). Hava durumu verisi için (Open-Meteo) API key gerekmez.
 
 Veri toplama ve işleme:
 
 ```bash
 python src/ingestion.py
+python src/weather_backfill.py
 python src/features.py
 ```
 
