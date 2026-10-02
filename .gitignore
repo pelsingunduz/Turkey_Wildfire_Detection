@@ -30,3 +30,4 @@ data/processed/full_panel_daily.csv
 outputs/models/forecaster_lr.joblib
 outputs/models/forecaster_rf.joblib
 outputs/models/forecaster_xgb.joblib
+source/
