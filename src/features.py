@@ -253,8 +253,53 @@ def fetch_forecast_weather(lat, lon, target_date):
         return None
 
 
+def fetch_forecast_weather_batch(coords, target_date, batch_size=100):
+    """fetch_forecast_weather'ın çok konumlu versiyonu: Open-Meteo tek istekte
+    virgülle ayrılmış birden fazla koordinatı kabul ediyor. Tüm Türkiye'yi
+    (~1300 grid hücresi) taramak için ~1300 yerine ~13 istek atılır.
+
+    coords: [(lat, lon), ...]. Aynı sırada, her konum için hava durumu
+    sözlüğü ya da (o konum/batch başarısız olursa) None döner."""
+    target_str = target_date.strftime('%Y-%m-%d')
+    results = [None] * len(coords)
+    for start in range(0, len(coords), batch_size):
+        chunk = coords[start:start + batch_size]
+        try:
+            response = requests.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": ",".join(str(round(lat, 4)) for lat, _ in chunk),
+                    "longitude": ",".join(str(round(lon, 4)) for _, lon in chunk),
+                    "daily": "temperature_2m_max,precipitation_sum,wind_speed_10m_max,wind_direction_10m_dominant",
+                    "timezone": "Europe/Istanbul",
+                    "forecast_days": 3,
+                },
+                timeout=30,
+            )
+            if response.status_code != 200:
+                continue
+            payload = response.json()
+        except requests.exceptions.RequestException:
+            continue
+        # Tek konum gönderilirse API liste yerine tek nesne döndürüyor
+        if isinstance(payload, dict):
+            payload = [payload]
+        for offset, location in enumerate(payload):
+            data = location.get("daily", {})
+            if target_str not in data.get("time", []):
+                continue
+            idx = data["time"].index(target_str)
+            results[start + offset] = {
+                'temp_max': data["temperature_2m_max"][idx],
+                'precip_sum': data["precipitation_sum"][idx],
+                'wind_speed_max': data["wind_speed_10m_max"][idx],
+                'wind_direction_dominant': data["wind_direction_10m_dominant"][idx],
+            }
+    return results
+
+
 def build_latest_occurrence_features(daily_summary_df, grid_id, grid_lat, grid_lon,
-                                      as_of_date=None, window_days=30):
+                                      as_of_date=None, window_days=30, fetch_weather=True):
     """SERVING (dashboard) zamanı için: tek bir grid hücresi için YARININ yangın
     olasılığı tahmininde kullanılacak feature'ları, 1.4M satırlık tam paneli
     diske kaydetmeden/yüklemeden hesaplar.
@@ -267,6 +312,8 @@ def build_latest_occurrence_features(daily_summary_df, grid_id, grid_lat, grid_l
 
     as_of_date: 'bugün' kabul edilecek tarih (varsayılan: veri setindeki en
     son tarih). Tahmin, as_of_date + 1 gün için yapılır.
+    fetch_weather: False ise canlı hava durumu API'sine gidilmez, hava durumu
+    feature'ları boş (NaN) kalır (testler ve çevrimdışı kullanım için).
     """
     daily_summary_df = daily_summary_df.copy()
     daily_summary_df['date'] = pd.to_datetime(daily_summary_df['date'])
@@ -301,7 +348,7 @@ def build_latest_occurrence_features(daily_summary_df, grid_id, grid_lat, grid_l
     features = add_population_density(features.assign(grid_id=grid_id))
     features = features.drop(columns=['grid_id'])
 
-    weather = fetch_forecast_weather(grid_lat, grid_lon, target_date)
+    weather = fetch_forecast_weather(grid_lat, grid_lon, target_date) if fetch_weather else None
     for col in WEATHER_FEATURE_COLUMNS:
         features[col] = weather[col] if weather else None
 

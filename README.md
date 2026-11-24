@@ -301,6 +301,7 @@ turkey-wildfire-detection/
 │ ├── weather_backfill.py # İl bazlı hava durumu (artımlı günceller)
 │ ├── geocode_grid.py # Grid hücreleri için il/ilçe isimleri
 │ ├── features.py # Temizlik, sınır filtresi, grid, günlük özet, tam panel
+│ ├── inference.py # Tahmin katmanı: 4 modelin çıktısı, Streamlit'ten bağımsız
 │ └── models/
 │ ├── occurrence.py # Yangın olasılığı (XGBoost)
 │ ├── classifier.py
@@ -310,9 +311,12 @@ turkey-wildfire-detection/
 │ └── eda.ipynb # Keşifsel analiz
 ├── dashboard/
 │ └── app.py # Streamlit dashboard + LLM açıklama katmanı
+├── tests/
+│ └── test_inference.py # Tahmin katmanı testleri (çevrimdışı çalışır)
 ├── outputs/
 │ └── models/ # Eğitilmiş modeller (joblib, sadece resmi olanlar commit'li)
-└── requirements.txt
+├── requirements.txt
+└── requirements-dev.txt # requirements.txt + pytest
 ```
 
 ## Kurulum ve Çalıştırma
@@ -370,6 +374,34 @@ Dashboard'u başlatma:
 
 ```bash
 streamlit run dashboard/app.py
+```
+
+## Tahmin Katmanı (`src/inference.py`)
+
+Dört modelin bir bölge için tahmin üretme mantığı, dashboard'dan ayrılarak
+`src/inference.py`'ye taşındı. Böylece aynı tahminler Streamlit olmadan da
+kullanılabiliyor: LLM agent'ı (tool calling), zamanlanmış uyarılar ve
+ileride bir API. Dashboard da artık bu fonksiyonları çağırıyor; sonuçlar,
+taşımadan önceki hesaplamayla birebir aynı.
+
+```python
+from src.inference import find_regions, get_region_report, get_top_risk_regions
+
+find_regions("mugla")              # il/ilçe araması (Türkçe karakter ve büyük/küçük harf duyarsız)
+get_region_report("38.5_26.75")    # bir hücre için 4 modelin çıktısı (JSON'a çevrilebilir sözlük)
+get_top_risk_regions(n=10)         # bir sonraki gün için en yüksek yangın olasılıklı bölgeler
+```
+
+`get_top_risk_regions`, ~1300 hücrenin feature'larını tek seferde (vektörel)
+hesaplıyor ve yarının hava durumunu Open-Meteo'dan toplu isteklerle (~13
+istek) çekiyor. Vektörel hesaplamanın, dashboard'un kullandığı tek hücreli
+fonksiyonla aynı sonucu verdiği testlerle doğrulanıyor.
+
+Testleri çalıştırma (ağa çıkmaz, repodaki veri ve modellerle çalışır):
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
 ```
 
 ## Gelecek Geliştirmeler

@@ -9,7 +9,6 @@ görebilirsiniz.
 import streamlit as st
 import pandas as pd
 import folium
-import joblib
 import sys
 import os
 from dotenv import load_dotenv
@@ -28,13 +27,8 @@ try:
 except Exception:
     pass
 
-sys.path.append(os.path.abspath('src/models'))
 sys.path.append(os.path.abspath('src'))
-from anomaly import calculate_zscore_features, flag_anomalies # type: ignore
-from forecaster import add_lag_features, predict_clipped, FEATURE_COLUMNS as FORECASTER_FEATURES # type: ignore
-from features import build_latest_occurrence_features # type: ignore
-from classifier import REVERSE_LABEL_MAP # type: ignore
-from occurrence import FEATURE_COLUMNS as OCCURRENCE_FEATURES, WEATHER_COLUMNS # type: ignore
+from inference import load_grid_catalog, get_region_report # type: ignore
 from streamlit_folium import st_folium
 
 @st.cache_resource
@@ -131,89 +125,14 @@ with st.expander("ℹ️ Bu sistem ne yapıyor? (açıklama için tıklayın)", 
 
 @st.cache_data
 def load_grid_points():
-    """Günlük özet tablodan benzersiz grid hücrelerini, il/ilçe isimleriyle birlikte çıkarır."""
-    df = pd.read_csv("data/processed/daily_grid_summary.csv")
-    grid_points = df[['grid_id', 'grid_lat', 'grid_lon']].drop_duplicates()
+    """Haritada gösterilecek grid hücreleri (il/ilçe isimleriyle).
 
-    locations = pd.read_csv("data/processed/grid_location_names.csv")
-    grid_points = grid_points.merge(locations, on='grid_id', how='left')
-
-    # Hem il hem ilçe bilinmiyorsa (sınır/deniz üzerine düşen hücreler),
-    # haritada anlamlı bir isim gösteremeyiz -- bu hücreleri haritadan
-    # çıkarıyoruz (model/veri tarafında hiçbir şey değişmiyor, sadece görünürlük).
-    unknown_both = (grid_points['province'] == 'Bilinmiyor') & (grid_points['district'] == 'Bilinmiyor')
-    grid_points = grid_points[~unknown_both]
-
-    grid_points['display_name'] = grid_points.apply(
-        lambda row: row['province'] if row['district'] == 'Bilinmiyor' else f"{row['province']} - {row['district']}",
-        axis=1
-    )
-
-    # Aynı il/ilçeye birden fazla grid hücresi düşebilir (0.25° hücre, idari
-    # sınırdan küçük olabiliyor) -- haritada karışıklık/çakışma olmasın diye
-    # her isimden sadece bir tanesini gösteriyoruz.
-    grid_points = grid_points.drop_duplicates(subset='display_name', keep='first')
-
-    return grid_points
-
-
-@st.cache_data
-def load_data_with_lag_features():
-    """Günlük özet tabloyu okur, lag feature'ları hesaplar (forecaster.py'deki mantıkla aynı)."""
-    df = pd.read_csv("data/processed/daily_grid_summary.csv")
-    df = add_lag_features(df)
-    return df
-
-
-@st.cache_data
-def load_data_with_anomaly_features():
-    """Günlük özet tabloyu okur, z-score ve anomali bayrağını hesaplar."""
-    df = pd.read_csv("data/processed/daily_grid_summary.csv")
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.sort_values(['grid_id', 'date']).reset_index(drop=True)
-    df = calculate_zscore_features(df)
-    df = flag_anomalies(df)
-    return df
-
-
-@st.cache_data
-def load_daily_summary():
-    """Ham günlük özet tabloyu okur (occurrence feature hesaplaması için)."""
-    df = pd.read_csv("data/processed/daily_grid_summary.csv")
-    df['date'] = pd.to_datetime(df['date'])
-    return df
-
-
-@st.cache_resource
-def load_classifier():
-    """Kayıtlı sınıflandırma modelini yükler (Logistic Regression, ölçeklendirilmiş veri bekler)."""
-    return joblib.load("outputs/models/classifier.joblib")
-
-
-@st.cache_resource
-def load_scaler():
-    """Sınıflandırma modeliyle birlikte eğitilen StandardScaler'ı yükler."""
-    return joblib.load("outputs/models/scaler.joblib")
-
-
-@st.cache_resource
-def load_forecaster():
-    """Kayıtlı zaman serisi modelini yükler."""
-    return joblib.load("outputs/models/forecaster.joblib")
-
-
-@st.cache_resource
-def load_occurrence_model():
-    """Kayıtlı yangın olasılığı modelini yükler (XGBoost, ölçeklendirme gerektirmez)."""
-    return joblib.load("outputs/models/occurrence.joblib")
-
-
-def get_latest_features(grid_id, df):
-    """Belirli bir grid hücresi için en güncel (en son tarihli) satırı döndürür."""
-    grid_rows = df[df['grid_id'] == grid_id].sort_values('date')
-    if len(grid_rows) == 0:
-        return None
-    return grid_rows.iloc[-1]
+    Hücre listesi ve isimlendirme src/inference.py'den geliyor (agent ve
+    otomasyonlar da aynı listeyi kullanıyor). Burada yalnızca haritaya özgü
+    bir görünüm tercihi uygulanıyor: aynı il/ilçeye birden fazla grid hücresi
+    düşebildiği için (0.25° hücre, idari sınırdan küçük olabiliyor) haritada
+    çakışma olmasın diye her isimden sadece bir tanesi gösteriliyor."""
+    return load_grid_catalog().drop_duplicates(subset='display_name', keep='first')
 
 
 grid_points = load_grid_points()
@@ -261,61 +180,17 @@ if map_data.get("last_object_clicked_tooltip"):
         selected_grid = selected_grid_row['grid_id']
         st.success(f"Seçilen bölge: {selected_display_name}")
 
-        full_data = pd.read_csv("data/processed/daily_grid_summary.csv")
-        latest_row = get_latest_features(selected_grid, full_data)
-
-        # --- Tüm hesaplamaları önce yap (gösterimden bağımsız) ---
-
-        # 1) Yangın olasılığı -- her zaman hesaplanabilir
-        daily_summary = load_daily_summary()
-        occ_features, target_date = build_latest_occurrence_features(
-            daily_summary,
-            grid_id=selected_grid,
-            grid_lat=selected_grid_row['grid_lat'],
-            grid_lon=selected_grid_row['grid_lon'],
-        )
-        occurrence_model = load_occurrence_model()
-        # Hava durumu API'si cevap vermezse (ör. Streamlit Cloud'da hız sınırı)
-        # hava durumu sütunları None (object tipi) kalıyor ve XGBoost yalnızca
-        # sayısal tip kabul ettiği için çöküyordu. float'a çevirince None -> NaN
-        # oluyor; XGBoost eksik değerleri doğal olarak işliyor.
-        probability = occurrence_model.predict_proba(occ_features[OCCURRENCE_FEATURES].astype(float))[0, 1]
-        weather_missing = occ_features[WEATHER_COLUMNS].astype(float).isna().all(axis=1).iloc[0]
-
-        # 2) Risk seviyesi (şiddet) -- sadece geçmiş tespiti varsa
-        # NOT: Resmi model XGBoost (bkz. classifier.py) -- ölçeklendirme
-        # GEREKMEZ, sayısal kod döner (REVERSE_LABEL_MAP ile string'e çevrilir).
-        severity_prediction = None
-        if latest_row is not None:
-            classifier = load_classifier()
-            features = latest_row[['avg_brightness', 'avg_frp', 'max_frp']].values.reshape(1, -1)
-            severity_code = classifier.predict(features)[0]
-            severity_prediction = REVERSE_LABEL_MAP[severity_code]
-
-        # 3) Zaman serisi tahmini -- yeterli lag verisi varsa
-        ts_prediction = None
-        latest_lag_row = None
-        if latest_row is not None:
-            data_with_lag = load_data_with_lag_features()
-            grid_lag_data = data_with_lag[data_with_lag['grid_id'] == selected_grid].sort_values('date')
-            if len(grid_lag_data) > 0:
-                latest_lag_row = grid_lag_data.iloc[-1]
-                if not pd.isna(latest_lag_row['lag_1_fire_count']):
-                    forecaster = load_forecaster()
-                    ts_features = latest_lag_row[FORECASTER_FEATURES].values.reshape(1, -1)
-                    ts_prediction = predict_clipped(forecaster, ts_features)[0]
-
-        # 4) Anomali durumu -- yeterli geçmiş varsa
-        z_score = None
-        is_anomaly = None
-        if latest_row is not None:
-            anomaly_data = load_data_with_anomaly_features()
-            grid_anomaly_data = anomaly_data[anomaly_data['grid_id'] == selected_grid].sort_values('date')
-            if len(grid_anomaly_data) > 0:
-                latest_anomaly_row = grid_anomaly_data.iloc[-1]
-                if not pd.isna(latest_anomaly_row['z_score']):
-                    z_score = latest_anomaly_row['z_score']
-                    is_anomaly = latest_anomaly_row['is_anomaly']
+        # Dört modelin hesaplaması src/inference.py'de (agent/otomasyonlarla ortak).
+        report = get_region_report(selected_grid)
+        target_date = pd.to_datetime(report['target_date'])
+        probability = report['fire_probability']
+        severity_prediction = report['severity']
+        ts_prediction = report['next_day_hotspot_forecast']
+        z_score = report['anomaly']['z_score'] if report['anomaly'] else None
+        is_anomaly = report['anomaly']['is_anomaly'] if report['anomaly'] else None
+        latest_row = report['last_detection']  # None: bu hücrede hiç tespit yok
+        # Hava durumu alınamadıysa olasılık panelinde uyarı gösterilir (bkz. aşağısı)
+        weather_missing = not report['weather_used']
 
         # --- Doğal dilde özet ---
         summary = (
@@ -401,7 +276,7 @@ if map_data.get("last_object_clicked_tooltip"):
                         help="Geçmiş sıcak nokta sayılarına bakarak, bir sonraki gün için "
                              "beklenen sıcak nokta sayısı (regresyon modeli)."
                     )
-                    st.caption(f"Dünkü değer: {latest_lag_row['lag_1_fire_count']:.0f}")
+                    st.caption(f"Dünkü değer: {report['previous_fire_count']:.0f}")
                 else:
                     st.info("Bu bölge için henüz yeterli geçmiş veri yok (en az 2 gün gerekiyor).")
 
