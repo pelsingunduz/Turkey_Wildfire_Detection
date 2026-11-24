@@ -18,7 +18,7 @@ sistem inşa etmek — statik bir Kaggle veri setinden değil, canlı bir API'de
 
 ## Mimari
 ```
-NASA FIRMS API (VIIRS_SNPP_NRT canlı + VIIRS_SNPP_SP geçmiş, Türkiye bounding box)
+NASA FIRMS API (VIIRS_NOAA20_NRT canlı — 2026-11-02'ye kadar VIIRS_SNPP_NRT — + VIIRS_SNPP_SP geçmiş, Türkiye bounding box)
 + Open-Meteo API (hava durumu: sıcaklık, yağış, rüzgar — il bazında)
 ↓
 INGESTION — her 4 saatte bir otomatik veri çekme (GitHub Actions) + 3 yıllık geçmiş veri backfill
@@ -72,9 +72,30 @@ uygulamaları uyku moduna alıyor; 4 saatlik ziyaretler bu eşiğin altında kal
 
 Bu proje, her adımda bilinçli mühendislik kararları içeriyor:
 
-- **Tek sensör (VIIRS_SNPP_NRT):** Çoklu sensör kullanmak duplicate detection
+- **Tek sensör (VIIRS):** Çoklu sensör kullanmak duplicate detection
   karmaşıklığı getirirdi; VIIRS'in ~375m çözünürlüğü küçük yangınları da
   yakalayabiliyor.
+- **Canlı kaynak SNPP'den NOAA-20'ye geçirildi (Kasım 2026):** Suomi NPP'nin
+  NRT akışı 2026-11-02'de kesildi; FIRMS API o günden sonra hata vermeden
+  **boş** CSV döndürdü ve pipeline üç hafta boyunca fark edilmeden boş veri
+  topladı. Canlı kaynak, aynı VIIRS cihazını taşıyan `VIIRS_NOAA20_NRT`'ye
+  çevrildi ve 3-23 Kasım boşluğu NOAA-20 verisiyle dolduruldu. Geçişten önce
+  iki uydunun aynı dönemdeki tespit sayıları karşılaştırıldı (Ekim 2026,
+  5 günlük dört pencere):
+
+  | 5 günlük pencere | SNPP | NOAA-20 |
+  |---|---|---|
+  | 2026-10-01 | 1512 | 1464 |
+  | 2026-10-10 | 2511 | 2719 |
+  | 2026-10-20 | 1918 | 1750 |
+  | 2026-10-28 | 342 | 409 |
+
+  Fark ±%15 içinde ve yönü tutarsız (sistematik bir kayma yok), bu yüzden
+  modeller yeniden kalibrasyon gerektirmeden aynı veriyle eğitilmeye devam
+  ediyor. Bir daha aynı şeyin sessizce olmaması için `ingestion.py`, art
+  arda 6 çalıştırma (~24 saat) boş dönerse hata vererek GitHub Actions
+  job'ını başarısız sayıyor (bounding box, sürekli yanan gaz yakma
+  noktalarını da kapsadığı için 24 saat boyunca sıfır tespit gerçekçi değil).
 - **0.25° grid boyutu:** 0.5° bölgesel farkları (örn. Akdeniz kıyı şeridinin
   yüksek riski) eritiyor, 0.1° ise çoğu hücreyi anlamlı veri olmadan boş
   bırakıyor. 0.25°, ilçe ölçeğine yakın bir çözünürlükle dengeyi tutturuyor.
@@ -257,7 +278,7 @@ karşılaştırıyor) — bu, erken uyarı sistemi için daha isabetli bir çer�
 
 ## Teknoloji Yığını
 
-- **Veri:** NASA FIRMS API (VIIRS_SNPP_NRT canlı, VIIRS_SNPP_SP geçmiş),
+- **Veri:** NASA FIRMS API (VIIRS_NOAA20_NRT canlı, VIIRS_SNPP_SP geçmiş),
   Open-Meteo API (hava durumu — archive + forecast)
 - **İşleme:** pandas, geopandas, shapely, numpy
 - **Modelleme:** scikit-learn (RandomForestClassifier, LogisticRegression,
