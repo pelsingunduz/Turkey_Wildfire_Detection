@@ -34,7 +34,7 @@ from anomaly import calculate_zscore_features, flag_anomalies # type: ignore
 from forecaster import add_lag_features, predict_clipped, FEATURE_COLUMNS as FORECASTER_FEATURES # type: ignore
 from features import build_latest_occurrence_features # type: ignore
 from classifier import REVERSE_LABEL_MAP # type: ignore
-from occurrence import FEATURE_COLUMNS as OCCURRENCE_FEATURES # type: ignore
+from occurrence import FEATURE_COLUMNS as OCCURRENCE_FEATURES, WEATHER_COLUMNS # type: ignore
 from streamlit_folium import st_folium
 
 @st.cache_resource
@@ -275,7 +275,12 @@ if map_data.get("last_object_clicked_tooltip"):
             grid_lon=selected_grid_row['grid_lon'],
         )
         occurrence_model = load_occurrence_model()
-        probability = occurrence_model.predict_proba(occ_features[OCCURRENCE_FEATURES])[0, 1]
+        # Hava durumu API'si cevap vermezse (ör. Streamlit Cloud'da hız sınırı)
+        # hava durumu sütunları None (object tipi) kalıyor ve XGBoost yalnızca
+        # sayısal tip kabul ettiği için çöküyordu. float'a çevirince None -> NaN
+        # oluyor; XGBoost eksik değerleri doğal olarak işliyor.
+        probability = occurrence_model.predict_proba(occ_features[OCCURRENCE_FEATURES].astype(float))[0, 1]
+        weather_missing = occ_features[WEATHER_COLUMNS].astype(float).isna().all(axis=1).iloc[0]
 
         # 2) Risk seviyesi (şiddet) -- sadece geçmiş tespiti varsa
         # NOT: Resmi model XGBoost (bkz. classifier.py) -- ölçeklendirme
@@ -370,6 +375,11 @@ if map_data.get("last_object_clicked_tooltip"):
                      "%0 kesinlikle olmayacağı, %100 kesinlikle olacağı anlamına gelmez."
             )
             st.caption(f"Tahmin edilen gün: {target_date.date()}")
+            if weather_missing:
+                st.warning(
+                    "Yarının hava durumu tahmini şu an alınamadı; bu olasılık hava durumu "
+                    "olmadan hesaplandı ve gerçek riski olduğundan düşük gösterebilir."
+                )
 
         if latest_row is not None:
             with col1:
