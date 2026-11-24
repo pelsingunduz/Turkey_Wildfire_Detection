@@ -15,6 +15,9 @@ DAY_RANGE = 5  # Not: genel dokümantasyon 1-10 diyor ama bu MAP_KEY için API "
 
 # Geçmiş veri için önce Standard Processing (bilimsel kalite, gecikmeli) denenir;
 # henüz işlenmemiş yakın tarihlerde boş/geçersiz dönerse Near Real-Time'a düşülür.
+# Not: VIIRS_SNPP_NRT 2026-11-02'de kesildi; o tarihten sonrası için kaynak
+# komut satırından verilmeli (bkz. dosya sonundaki kullanım örneği ve
+# ingestion.py'deki SENSOR açıklaması).
 SOURCES_TO_TRY = ["VIIRS_SNPP_SP", "VIIRS_SNPP_NRT"]
 
 EXPECTED_COLUMNS = {"latitude", "longitude", "acq_date"}
@@ -40,7 +43,7 @@ def is_valid_csv(text):
     return EXPECTED_COLUMNS.issubset(header_cols)
 
 
-def fetch_historical_chunk(date_str, day_range=DAY_RANGE):
+def fetch_historical_chunk(date_str, day_range=DAY_RANGE, sources=None):
     """SP'yi dener; format geçersizse ya da 0 veri dönerse (henüz işlenmemiş olabilir)
     NRT'ye düşer. Hiçbirinde veri yoksa (gerçekten yangın yoktur diye) son geçerli
     boş sonucu kabul eder. (veri, kullanılan_kaynak, son_hata) döner."""
@@ -48,7 +51,7 @@ def fetch_historical_chunk(date_str, day_range=DAY_RANGE):
     fallback_empty_result = None
     fallback_empty_source = None
 
-    for source in SOURCES_TO_TRY:
+    for source in (sources or SOURCES_TO_TRY):
         text, error = fetch_chunk(source, date_str, day_range)
         if error:
             last_error = f"{source}: {error}"
@@ -86,7 +89,7 @@ def save_raw(df, date_str, day_range):
     print(f"  Kaydedildi: {filepath}")
 
 
-def backfill(start_date, end_date, day_range=DAY_RANGE, sleep_seconds=1.5):
+def backfill(start_date, end_date, day_range=DAY_RANGE, sleep_seconds=1.5, sources=None):
     current = start_date
     total_chunks = (end_date - start_date).days // day_range + 1
     chunk_no = 0
@@ -96,7 +99,7 @@ def backfill(start_date, end_date, day_range=DAY_RANGE, sleep_seconds=1.5):
         date_str = current.strftime("%Y-%m-%d")
         print(f"[{chunk_no}/{total_chunks}] {date_str} ({day_range} günlük aralık) isteniyor...")
 
-        text, source, error = fetch_historical_chunk(date_str, day_range)
+        text, source, error = fetch_historical_chunk(date_str, day_range, sources)
         if text is None:
             print(f"  UYARI: {date_str} için veri alınamadı, atlanıyor. Sebep: {error}")
         else:
@@ -117,14 +120,19 @@ if __name__ == "__main__":
     if not MAP_KEY:
         raise SystemExit("FIRMS_MAP_KEY .env dosyasında bulunamadı.")
 
-    if len(sys.argv) == 3:
+    sources = None
+    if len(sys.argv) in (3, 4):
         # Elle aralık: python historical_backfill.py 2026-04-28 2026-09-10
+        # Kaynak da verilebilir (virgülle, denenecek sırayla):
+        #   python historical_backfill.py 2026-11-03 2026-11-23 VIIRS_NOAA20_NRT
         start = datetime.strptime(sys.argv[1], "%Y-%m-%d")
         end = datetime.strptime(sys.argv[2], "%Y-%m-%d")
+        if len(sys.argv) == 4:
+            sources = sys.argv[3].split(",")
     else:
         end = datetime.now(timezone.utc) - timedelta(days=1)
         start = end - timedelta(days=365 * 3)
 
     print(f"Backfill aralığı: {start.date()} -> {end.date()}")
-    backfill(start, end)
+    backfill(start, end, sources=sources)
     print("Backfill tamamlandı.")
